@@ -1,0 +1,237 @@
+"use client";
+
+import React, { useState, useEffect } from "react";
+import { User, UserCheck, Phone, ArrowRight, Loader2 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+
+export interface UserData {
+  fullName: string;
+  nickname: string;
+  phone: string;
+}
+
+interface LoginProps {
+  onSuccess: (data: UserData) => void;
+}
+
+interface CountryInfo {
+  code: string;
+  country: string;
+  flag: string;
+  prefix: string;
+}
+
+const COUNTRIES: CountryInfo[] = [
+  { code: "GH", country: "Ghana", flag: "🇬🇭", prefix: "+233" },
+  { code: "US", country: "United States", flag: "🇺🇸", prefix: "+1" },
+  { code: "GB", country: "United Kingdom", flag: "🇬🇧", prefix: "+44" },
+  { code: "NG", country: "Nigeria", flag: "🇳🇬", prefix: "+234" },
+  { code: "CA", country: "Canada", flag: "🇨🇦", prefix: "+1" },
+  { code: "KE", country: "Kenya", flag: "🇰🇪", prefix: "+254" },
+  { code: "ZA", country: "South Africa", flag: "🇿🇦", prefix: "+27" },
+  { code: "DE", country: "Germany", flag: "🇩🇪", prefix: "+49" },
+  { code: "FR", country: "France", flag: "🇫🇷", prefix: "+33" },
+  { code: "IN", country: "India", flag: "🇮🇳", prefix: "+91" },
+  { code: "JP", country: "Japan", flag: "🇯🇵", prefix: "+81" },
+  { code: "AU", country: "Australia", flag: "🇦🇺", prefix: "+61" },
+  { code: "BR", country: "Brazil", flag: "🇧🇷", prefix: "+55" },
+  { code: "AE", country: "UAE", flag: "🇦🇪", prefix: "+971" },
+];
+
+export function Login({ onSuccess }: LoginProps) {
+  const [fullName, setFullName] = useState("");
+  const [nickname, setNickname] = useState("");
+  const [phone, setPhone] = useState("");
+  const [detectedCountry, setDetectedCountry] = useState<CountryInfo | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (tz.includes("Accra") || tz.includes("Ghana")) {
+        setDetectedCountry(COUNTRIES.find((c) => c.code === "GH") || COUNTRIES[0]);
+      } else if (tz.includes("London") || tz.includes("Europe/London")) {
+        setDetectedCountry(COUNTRIES.find((c) => c.code === "GB") || COUNTRIES[0]);
+      } else if (tz.includes("Lagos")) {
+        setDetectedCountry(COUNTRIES.find((c) => c.code === "NG") || COUNTRIES[0]);
+      } else if (tz.includes("America")) {
+        setDetectedCountry(COUNTRIES.find((c) => c.code === "US") || COUNTRIES[1]);
+      } else {
+        setDetectedCountry(COUNTRIES[0]);
+      }
+    } catch {
+      setDetectedCountry(COUNTRIES[0]);
+    }
+  }, []);
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setPhone(val);
+
+    const cleanVal = val.trim();
+    if (cleanVal.startsWith("+") || cleanVal.length >= 2) {
+      const match = COUNTRIES.find((c) => cleanVal.startsWith(c.prefix));
+      if (match) {
+        setDetectedCountry(match);
+      }
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+
+    const trimmedFullName = fullName.trim();
+    const trimmedNickname = nickname.trim();
+
+    let formattedPhone = phone.trim();
+    if (detectedCountry && !formattedPhone.startsWith("+")) {
+      const digitsOnly = formattedPhone.replace(/^0+/, "");
+      formattedPhone = `${detectedCountry.prefix}${digitsOnly}`;
+    }
+
+    if (!trimmedFullName || !trimmedNickname || !formattedPhone) return;
+
+    setLoading(true);
+
+    const { error } = await supabase.from("users").upsert(
+      {
+        full_name: trimmedFullName,
+        nickname: trimmedNickname,
+        phone: formattedPhone,
+      },
+      { onConflict: "phone" }
+    );
+
+    setLoading(false);
+
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+
+    onSuccess({
+      fullName: trimmedFullName,
+      nickname: trimmedNickname,
+      phone: formattedPhone,
+    });
+  };
+
+  return (
+    <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between p-6 max-w-md mx-auto w-full select-none">
+      {/* Brand Header with App Logo */}
+      <div className="pt-8">
+        <img src="/logo.png" alt="Loci Logo" className="h-10 w-auto object-contain mb-6" />
+        <h1 className="text-2xl font-extrabold tracking-tight text-black dark:text-white">
+          Create Your Loci Profile
+        </h1>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1.5 leading-relaxed">
+          Set up your identity before starting safety check-ins.
+        </p>
+      </div>
+
+      {/* Form */}
+      <form onSubmit={handleSubmit} className="my-auto py-6 space-y-5">
+        {errorMessage && (
+          <div className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
+            {errorMessage}
+          </div>
+        )}
+
+        {/* 1. Full Name */}
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">
+            Full Name
+          </label>
+          <div className="relative flex items-center">
+            <User className="w-4 h-4 absolute left-4 text-zinc-400" />
+            <input
+              type="text"
+              required
+              disabled={loading}
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3.5 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 dark:focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+            />
+          </div>
+          <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1.5">
+            Used strictly for official account identification.
+          </p>
+        </div>
+
+        {/* 2. Nickname */}
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">
+            Nickname (Known to contacts)
+          </label>
+          <div className="relative flex items-center">
+            <UserCheck className="w-4 h-4 absolute left-4 text-zinc-400" />
+            <input
+              type="text"
+              required
+              disabled={loading}
+              value={nickname}
+              onChange={(e) => setNickname(e.target.value)}
+              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3.5 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 dark:focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+            />
+          </div>
+          <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1.5">
+            Sent in check-in texts (e.g., "<strong>{nickname.trim() || "Sam"}</strong> arrived safely").
+          </p>
+        </div>
+
+        {/* 3. Phone Number */}
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+              Mobile Phone Number
+            </label>
+            {detectedCountry && (
+              <span className="inline-flex items-center space-x-1 text-[11px] font-extrabold bg-yellow-400 text-black px-2 py-0.5 rounded-md">
+                <span>{detectedCountry.flag}</span>
+                <span>{detectedCountry.country}</span>
+                <span>({detectedCountry.prefix})</span>
+              </span>
+            )}
+          </div>
+          <div className="relative flex items-center">
+            <Phone className="w-4 h-4 absolute left-4 text-zinc-400" />
+            <input
+              type="tel"
+              required
+              disabled={loading}
+              value={phone}
+              onChange={handlePhoneChange}
+              placeholder={detectedCountry ? `${detectedCountry.prefix} ...` : "+..."}
+              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3.5 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 dark:focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+            />
+          </div>
+          <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1.5">
+            Your unique account identifier.
+          </p>
+        </div>
+
+        {/* Yellow Action Button */}
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50 mt-2"
+        >
+          {loading ? (
+            <Loader2 className="w-4 h-4 animate-spin text-black" />
+          ) : (
+            <>
+              <span>Save Profile &amp; Continue</span>
+              <ArrowRight className="w-4 h-4 text-black" />
+            </>
+          )}
+        </button>
+      </form>
+
+      <p className="text-[11px] text-zinc-400 dark:text-zinc-600 text-center pb-4">
+        Loci safety check-ins require explicit consent. No continuous tracking.
+      </p>
+    </div>
+  );
+}
