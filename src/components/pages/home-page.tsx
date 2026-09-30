@@ -25,7 +25,7 @@ interface HomePageProps {
   contactsSupported: boolean;
   handlePickDeviceContact: () => void;
   handleCompleteSession: () => void;
-  onNavigate: (tab: "home" | "session" | "contacts" | "profile") => void;
+  onNavigate: (tab: "home" | "session" | "contacts" | "share" | "profile") => void;
 }
 
 export function HomePage({

@@ -1,13 +1,14 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { Home, Shield, Users, User } from "lucide-react";
+import { Home, Shield, Users, Share2, User } from "lucide-react";
 import { useTheme } from "next-themes";
 import { supabase } from "@/lib/supabase";
 
 import { HomePage } from "@/components/pages/home-page";
 import { SessionPage } from "@/components/pages/session-page";
 import { ContactsPage } from "@/components/pages/contacts-page";
+import { SharePage } from "@/components/pages/share-page";
 import { ProfilePage } from "@/components/pages/profile-page";
 
 interface MainAppProps {
@@ -53,7 +54,7 @@ const BANNERS = [
 ];
 
 export function MainApp({ userPhone, onLogout }: MainAppProps) {
-  const [activeTab, setActiveTab] = useState<"home" | "session" | "contacts" | "profile">("home");
+  const [activeTab, setActiveTab] = useState<"home" | "session" | "contacts" | "share" | "profile">("home");
   const [nickname, setNickname] = useState("");
   const [fullName, setFullName] = useState("");
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -72,7 +73,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const [locationCoords, setLocationCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [locationStatus, setLocationStatus] = useState<"idle" | "granted" | "denied">("idle");
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
-  const [contactsSupported, setContactsSupported] = useState(false);
 
   const [dataLoading, setDataLoading] = useState(true);
   const [currentBanner, setCurrentBanner] = useState(0);
@@ -85,9 +85,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     if (typeof window !== "undefined") {
       if ("Notification" in window) {
         setNotificationPermission(Notification.permission);
-      }
-      if ("contacts" in navigator && "ContactsManager" in window) {
-        setContactsSupported(true);
       }
     }
   }, []);
@@ -128,43 +125,47 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
   const loadUserData = useCallback(async () => {
     setDataLoading(true);
+    try {
+      const { data: userData, error: userError } = await supabase
+        .from("users")
+        .select("full_name, nickname")
+        .eq("phone", userPhone)
+        .maybeSingle();
 
-    const { data: userData } = await supabase
-      .from("users")
-      .select("full_name, nickname")
-      .eq("phone", userPhone)
-      .maybeSingle();
+      if (userError) console.error("User query error:", userError);
+      if (userData) {
+        setFullName(userData.full_name || "");
+        setNickname(userData.nickname || "");
+      }
 
-    if (userData) {
-      setFullName(userData.full_name || "");
-      setNickname(userData.nickname || "");
-    }
+      const { data: contactsData, error: contactsError } = await supabase
+        .from("trusted_contacts")
+        .select("id, name, phone")
+        .eq("user_phone", userPhone)
+        .order("created_at", { ascending: false });
 
-    const { data: contactsData } = await supabase
-      .from("trusted_contacts")
-      .select("id, name, phone")
-      .eq("user_phone", userPhone)
-      .order("created_at", { ascending: false });
+      if (contactsError) console.error("Contacts query error:", contactsError);
+      if (contactsData) {
+        setContacts(contactsData);
+        setSelectedContactIds(contactsData.map((c) => c.id));
+      }
 
-    if (contactsData) {
-      setContacts(contactsData);
-      setSelectedContactIds(contactsData.map((c) => c.id));
-    }
+      const { data: sessionData, error: sessionError } = await supabase
+        .from("checkin_sessions")
+        .select("id, destination, expected_arrival_at, status")
+        .eq("user_phone", userPhone)
+        .eq("status", "active")
+        .maybeSingle();
 
-    const { data: sessionData } = await supabase
-      .from("checkin_sessions")
-      .select("id, destination, expected_arrival_at, status")
-      .eq("user_phone", userPhone)
-      .eq("status", "active")
-      .maybeSingle();
-
-    if (sessionData) {
-      setActiveSession(sessionData);
-    }
-
-    setTimeout(() => {
+      if (sessionError) console.error("Session query error:", sessionError);
+      if (sessionData) {
+        setActiveSession(sessionData);
+      }
+    } catch (err) {
+      console.error("Failed to fetch initial data:", err);
+    } finally {
       setDataLoading(false);
-    }, 400);
+    }
   }, [userPhone]);
 
   useEffect(() => {
@@ -192,6 +193,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         destination: destination.trim(),
         expected_arrival_at: arrivalTime,
         status: "active",
+        notes: notes.trim() || null,
       })
       .select()
       .single();
@@ -218,43 +220,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
     if (!error) {
       setActiveSession(null);
-    }
-  };
-
-  const handlePickDeviceContact = async () => {
-    if (typeof window !== "undefined" && "contacts" in navigator) {
-      try {
-        const props = ["name", "tel"];
-        const selectedContacts = await (navigator as any).contacts.select(props, { multiple: false });
-
-        if (selectedContacts && selectedContacts.length > 0) {
-          const picked = selectedContacts[0];
-          const name = picked.name?.[0] || "Guardian";
-          const phone = picked.tel?.[0] || "";
-
-          if (phone) {
-            setAddingContact(true);
-            const { data, error } = await supabase
-              .from("trusted_contacts")
-              .insert({
-                user_phone: userPhone,
-                name: name,
-                phone: phone,
-              })
-              .select()
-              .single();
-
-            setAddingContact(false);
-
-            if (!error && data) {
-              setContacts((prev) => [data, ...prev]);
-              setSelectedContactIds((prev) => [...prev, data.id]);
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Device Contact Picker Error:", err);
-      }
     }
   };
 
@@ -297,7 +262,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
   return (
     <div className="min-h-screen bg-zinc-100/60 dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between max-w-md mx-auto w-full font-sans antialiased relative border-x border-zinc-200/50 dark:border-zinc-900 selection:bg-yellow-400 selection:text-black">
-      {/* Universal Header (Hidden on Session Tab) */}
+      {/* Top Header */}
       {activeTab !== "session" && (
         <header className="sticky top-0 z-30 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5 bg-white/70 dark:bg-black/70 backdrop-blur-3xl border-b border-zinc-200/40 dark:border-zinc-800/40 grid grid-cols-3 items-center">
           <div className="text-left truncate leading-none">
@@ -305,7 +270,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
               Welcome,
             </span>
             <span className="text-sm font-extrabold text-black dark:text-white truncate block">
-              {dataLoading ? "..." : `${nickname} 👋`}
+              {dataLoading ? "..." : `${nickname || "Guardian"} 👋`}
             </span>
           </div>
 
@@ -316,7 +281,11 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           <div className="flex justify-end items-center">
             <button
               onClick={() => setActiveTab("profile")}
-              className="p-1.5 rounded-full text-zinc-400 hover:text-black dark:hover:text-white bg-zinc-100/80 dark:bg-zinc-900/80 active:scale-90 transition-all"
+              className={`p-1.5 rounded-full text-zinc-400 hover:text-black dark:hover:text-white transition-all active:scale-90 ${
+                activeTab === "profile"
+                  ? "bg-yellow-400 text-black font-extrabold"
+                  : "bg-zinc-100/80 dark:bg-zinc-900/80"
+              }`}
               title="Profile & Settings"
             >
               <User className="w-4 h-4" />
@@ -325,7 +294,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         </header>
       )}
 
-      {/* Main Content Body */}
+      {/* Main Content View Switcher */}
       <main className="flex-1 px-4 py-5 space-y-5 pb-28">
         {dataLoading ? (
           <div className="space-y-5 animate-pulse">
@@ -349,8 +318,8 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
                 currentBanner={currentBanner}
                 setCurrentBanner={setCurrentBanner}
                 banners={BANNERS}
-                contactsSupported={contactsSupported}
-                handlePickDeviceContact={handlePickDeviceContact}
+                contactsSupported={true}
+                handlePickDeviceContact={() => setActiveTab("contacts")}
                 handleCompleteSession={handleCompleteSession}
                 onNavigate={setActiveTab}
               />
@@ -378,17 +347,24 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
             {activeTab === "contacts" && (
               <ContactsPage
+                userPhone={userPhone}
                 contacts={contacts}
-                contactsSupported={contactsSupported}
                 addingContact={addingContact}
                 manualName={manualName}
                 setManualName={setManualName}
                 manualPhone={manualPhone}
                 setManualPhone={setManualPhone}
-                handlePickDeviceContact={handlePickDeviceContact}
                 handleAddManualContact={handleAddManualContact}
                 handleDeleteContact={handleDeleteContact}
+                onContactAdded={(newC) => {
+                  setContacts((prev) => [newC, ...prev]);
+                  setSelectedContactIds((prev) => [...prev, newC.id]);
+                }}
               />
+            )}
+
+            {activeTab === "share" && (
+              <SharePage nickname={nickname} userPhone={userPhone} />
             )}
 
             {activeTab === "profile" && (
@@ -443,19 +419,19 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           }`}
         >
           <Users className="w-3.5 h-3.5" />
-          <span className="text-[10px]">Guardians</span>
+          <span className="text-[10px]">Circle</span>
         </button>
 
         <button
-          onClick={() => setActiveTab("profile")}
+          onClick={() => setActiveTab("share")}
           className={`flex items-center justify-center space-x-1 py-2.5 rounded-full transition-all active:scale-95 ${
-            activeTab === "profile"
+            activeTab === "share"
               ? "bg-yellow-400 text-black font-extrabold shadow-sm"
               : "text-zinc-400 hover:text-black dark:hover:text-white"
           }`}
         >
-          <User className="w-3.5 h-3.5" />
-          <span className="text-[10px]">Profile</span>
+          <Share2 className="w-3.5 h-3.5" />
+          <span className="text-[10px]">Share</span>
         </button>
       </nav>
     </div>
