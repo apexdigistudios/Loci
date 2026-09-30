@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { User, UserCheck, Phone, ArrowRight, Loader2 } from "lucide-react";
+import { User, UserCheck, Phone, Mail, Lock, ArrowRight, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
 export interface UserData {
@@ -41,6 +41,8 @@ const COUNTRIES: CountryInfo[] = [
 export function Login({ onSuccess }: LoginProps) {
   const [fullName, setFullName] = useState("");
   const [nickname, setNickname] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [detectedCountry, setDetectedCountry] = useState<CountryInfo | null>(null);
   const [loading, setLoading] = useState(false);
@@ -84,6 +86,7 @@ export function Login({ onSuccess }: LoginProps) {
 
     const trimmedFullName = fullName.trim();
     const trimmedNickname = nickname.trim();
+    const trimmedEmail = email.trim();
 
     let formattedPhone = phone.trim();
     if (detectedCountry && !formattedPhone.startsWith("+")) {
@@ -91,23 +94,60 @@ export function Login({ onSuccess }: LoginProps) {
       formattedPhone = `${detectedCountry.prefix}${digitsOnly}`;
     }
 
-    if (!trimmedFullName || !trimmedNickname || !formattedPhone) return;
+    if (!trimmedFullName || !trimmedNickname || !trimmedEmail || !password || !formattedPhone) return;
 
     setLoading(true);
 
-    const { error } = await supabase.from("users").upsert(
+    // 1. Authenticate with Supabase Auth (creates user in auth.users)
+    const { data: authData, error: signUpError } = await supabase.auth.signUp({
+      email: trimmedEmail,
+      password: password,
+      options: {
+        data: {
+          full_name: trimmedFullName,
+          nickname: trimmedNickname,
+          phone: formattedPhone,
+        },
+      },
+    });
+
+    let authUser = authData?.user;
+
+    // If existing account, attempt login with password
+    if (signUpError && signUpError.message.toLowerCase().includes("already registered")) {
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email: trimmedEmail,
+        password: password,
+      });
+
+      if (signInError) {
+        setLoading(false);
+        setErrorMessage(signInError.message);
+        return;
+      }
+      authUser = signInData?.user;
+    } else if (signUpError) {
+      setLoading(false);
+      setErrorMessage(signUpError.message);
+      return;
+    }
+
+    // 2. Save/Update user profile in public.users table
+    const { error: dbError } = await supabase.from("users").upsert(
       {
+        id: authUser?.id,
         full_name: trimmedFullName,
         nickname: trimmedNickname,
+        email: trimmedEmail,
         phone: formattedPhone,
       },
-      { onConflict: "phone" }
+      { onConflict: "email" }
     );
 
     setLoading(false);
 
-    if (error) {
-      setErrorMessage(error.message);
+    if (dbError) {
+      setErrorMessage(dbError.message);
       return;
     }
 
@@ -120,9 +160,9 @@ export function Login({ onSuccess }: LoginProps) {
 
   return (
     <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between p-6 max-w-md mx-auto w-full select-none">
-      {/* Brand Header with App Logo */}
-      <div className="pt-8">
-        <img src="/logo.png" alt="Loci Logo" className="h-10 w-auto object-contain mb-6" />
+      {/* Brand Header */}
+      <div className="pt-6">
+        <img src="/logo.png" alt="Loci Logo" className="h-10 w-auto object-contain mb-4" />
         <h1 className="text-2xl font-extrabold tracking-tight text-black dark:text-white">
           Create Your Loci Profile
         </h1>
@@ -132,7 +172,7 @@ export function Login({ onSuccess }: LoginProps) {
       </div>
 
       {/* Form */}
-      <form onSubmit={handleSubmit} className="my-auto py-6 space-y-5">
+      <form onSubmit={handleSubmit} className="my-auto py-4 space-y-4">
         {errorMessage && (
           <div className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
             {errorMessage}
@@ -141,7 +181,7 @@ export function Login({ onSuccess }: LoginProps) {
 
         {/* 1. Full Name */}
         <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
             Full Name
           </label>
           <div className="relative flex items-center">
@@ -152,17 +192,14 @@ export function Login({ onSuccess }: LoginProps) {
               disabled={loading}
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
-              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3.5 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 dark:focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
             />
           </div>
-          <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1.5">
-            Used strictly for official account identification.
-          </p>
         </div>
 
         {/* 2. Nickname */}
         <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1.5">
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
             Nickname (Known to contacts)
           </label>
           <div className="relative flex items-center">
@@ -173,22 +210,58 @@ export function Login({ onSuccess }: LoginProps) {
               disabled={loading}
               value={nickname}
               onChange={(e) => setNickname(e.target.value)}
-              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3.5 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 dark:focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
             />
           </div>
-          <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1.5">
-            Sent in check-in texts (e.g., "<strong>{nickname.trim() || "Sam"}</strong> arrived safely").
-          </p>
         </div>
 
-        {/* 3. Phone Number */}
+        {/* 3. Email Address (Auth Login) */}
         <div>
-          <div className="flex items-center justify-between mb-1.5">
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
+            Email Address
+          </label>
+          <div className="relative flex items-center">
+            <Mail className="w-4 h-4 absolute left-4 text-zinc-400" />
+            <input
+              type="email"
+              required
+              disabled={loading}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+            />
+          </div>
+        </div>
+
+        {/* 4. Password */}
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
+            Password
+          </label>
+          <div className="relative flex items-center">
+            <Lock className="w-4 h-4 absolute left-4 text-zinc-400" />
+            <input
+              type="password"
+              required
+              minLength={6}
+              disabled={loading}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+            />
+          </div>
+        </div>
+
+        {/* 5. Phone Number */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
             <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
               Mobile Phone Number
             </label>
             {detectedCountry && (
-              <span className="inline-flex items-center space-x-1 text-[11px] font-extrabold bg-yellow-400 text-black px-2 py-0.5 rounded-md">
+              <span className="inline-flex items-center space-x-1 text-[10px] font-extrabold bg-yellow-400 text-black px-2 py-0.5 rounded-md">
                 <span>{detectedCountry.flag}</span>
                 <span>{detectedCountry.country}</span>
                 <span>({detectedCountry.prefix})</span>
@@ -204,12 +277,9 @@ export function Login({ onSuccess }: LoginProps) {
               value={phone}
               onChange={handlePhoneChange}
               placeholder={detectedCountry ? `${detectedCountry.prefix} ...` : "+..."}
-              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3.5 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 dark:focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
             />
           </div>
-          <p className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1.5">
-            Your unique account identifier.
-          </p>
         </div>
 
         {/* Yellow Action Button */}
@@ -229,7 +299,7 @@ export function Login({ onSuccess }: LoginProps) {
         </button>
       </form>
 
-      <p className="text-[11px] text-zinc-400 dark:text-zinc-600 text-center pb-4">
+      <p className="text-[11px] text-zinc-400 dark:text-zinc-600 text-center pb-2">
         Loci safety check-ins require explicit consent. No continuous tracking.
       </p>
     </div>
