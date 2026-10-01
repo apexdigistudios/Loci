@@ -471,7 +471,7 @@ export function SessionPage({
     <>
       {/* CAMERA OVERLAY */}
       {isCameraActive && (
-        <div className="fixed inset-0 z-50 bg-black flex flex-col justify-between p-4 max-w-md mx-auto">
+        <div className="fixed inset-0 z-[100] bg-black flex flex-col justify-between p-4 max-w-md mx-auto">
           <div className="flex items-center justify-between pt-[max(0.75rem,env(safe-area-inset-top))] z-10 px-2">
             <button
               type="button"
@@ -685,7 +685,7 @@ export function SessionPage({
 
           {/* Alert Configuration Modal */}
           {showAlertModal && (
-            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
+            <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
               <div className="bg-zinc-900 text-white border border-zinc-800 rounded-4xl p-6 w-full max-w-sm space-y-5 relative shadow-2xl">
                 <button
                   onClick={() => setShowAlertModal(false)}

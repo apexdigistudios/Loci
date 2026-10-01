@@ -22,7 +22,7 @@ import {
   Image as ImageIcon,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { SatelliteMap } from "@/components/ui/satellite-map";
+import { SatelliteMap } from "../ui/satellite-map";
 
 export interface Contact {
   id: string;
@@ -164,7 +164,7 @@ export function ContactsPage({
   handleDeleteContact,
   onContactAdded,
 }: ContactsPageProps) {
-  const [subTab, setSubTab] = useState<"contacts" | "shared">("contacts");
+  const [subTab, setSubTab] = useState<"contacts" | "shared">(() => openSessionId ? "shared" : "contacts");
   const [activeGroupView, setActiveGroupView] = useState<string | null>(null);
 
   // Modal State
@@ -314,7 +314,6 @@ export function ContactsPage({
 
   useEffect(() => {
     if (!openSessionId) return;
-    setSubTab("shared");
     const targetSession = sharedSessions.find((session) => session.id === openSessionId);
     if (!targetSession) return;
     setActiveDetailSession(targetSession);
@@ -675,7 +674,7 @@ export function ContactsPage({
 
           {/* ADD GUARDIAN / GROUP MODAL POPUP */}
           {showAddModal && (
-            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
+            <div className="fixed inset-0 z-100 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
               <div className="bg-zinc-900 text-white border border-zinc-800 rounded-4xl p-6 w-full max-w-sm space-y-5 relative shadow-2xl">
                 <button
                   onClick={() => setShowAddModal(false)}
@@ -854,62 +853,40 @@ export function ContactsPage({
                   s.user?.full_name ||
                   contacts.find((c) => c.phone === s.user_phone)?.name ||
                   (s.user_phone === userPhone ? "You" : s.user_phone);
-                const coordinates = getSessionCoordinates(s);
                 const timestamp = new Date(s.created_at);
 
                 return (
-                  <div
+                  <button
                     key={s.id}
+                    type="button"
                     onClick={() => setActiveDetailSession(s)}
-                    className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 p-4 rounded-[22px] shadow-sm space-y-3 cursor-pointer hover:border-yellow-400/50 active:scale-[0.99] transition-all group"
+                    className="w-full bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 p-4 rounded-[22px] shadow-sm flex items-center justify-between gap-3 text-left cursor-pointer hover:border-yellow-400/50 active:scale-[0.99] transition-all group"
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center space-x-3.5 min-w-0">
-                        <div className="relative shrink-0">
-                          <div className="w-11 h-11 rounded-full overflow-hidden bg-zinc-900 text-yellow-400 font-black text-sm flex items-center justify-center uppercase border border-yellow-400">
-                            {s.user?.avatar_url ? (
-                              <img src={s.user.avatar_url} alt={`${displayName}'s profile`} className="w-full h-full object-cover" />
-                            ) : (
-                              displayName.slice(0, 2)
-                            )}
-                          </div>
-                          <span className="w-3 h-3 bg-emerald-500 border-2 border-white dark:border-black rounded-full absolute bottom-0 right-0 animate-ping" />
+                    <div className="flex items-center space-x-3.5 min-w-0">
+                      <div className="relative shrink-0">
+                        <div className="w-11 h-11 rounded-full overflow-hidden bg-zinc-900 text-yellow-400 font-black text-sm flex items-center justify-center uppercase border border-yellow-400">
+                          {s.user?.avatar_url ? (
+                            <img src={s.user.avatar_url} alt={`${displayName}'s profile`} className="w-full h-full object-cover" />
+                          ) : (
+                            displayName.slice(0, 2)
+                          )}
                         </div>
-
-                        <div className="min-w-0">
-                          <div className="flex items-center space-x-1.5">
-                            <p className="text-xs font-extrabold text-black dark:text-white truncate">{displayName}</p>
-                            <span className="text-[9px] font-black uppercase bg-yellow-400 text-black px-1.5 py-0.2 rounded-full">LIVE</span>
-                          </div>
-                          <p className="text-[10px] text-zinc-400 mt-0.5">
-                            {Number.isNaN(timestamp.getTime()) ? "Recently" : timestamp.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                          </p>
-                        </div>
+                        <span className="w-3 h-3 bg-emerald-500 border-2 border-white dark:border-black rounded-full absolute bottom-0 right-0 animate-ping" />
                       </div>
-                      <ChevronRight className="w-4 h-4 text-zinc-400 group-hover:text-black dark:group-hover:text-white transition-colors shrink-0" />
-                    </div>
 
-                    <div className="space-y-2">
-                      <p className="text-[11px] text-black dark:text-white flex items-start space-x-1.5">
-                        <MapPin className="w-3.5 h-3.5 text-yellow-500 shrink-0 mt-0.5" />
-                        <span className="font-bold">{s.destination}</span>
-                      </p>
-                      {s.notes && (
-                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 line-clamp-2">{s.notes}</p>
-                      )}
-                      {coordinates ? (
-                        <SatelliteMap
-                          latitude={coordinates.latitude}
-                          longitude={coordinates.longitude}
-                          className="h-36 rounded-xl pointer-events-none"
-                        />
-                      ) : (
-                        <div className="h-12 rounded-xl bg-zinc-100 dark:bg-zinc-800/70 flex items-center px-3 text-[10px] font-medium text-zinc-500 dark:text-zinc-400">
-                          Last location not shared
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center space-x-1.5">
+                          <span className="text-xs font-extrabold text-black dark:text-white truncate">{displayName}</span>
+                          <span className="text-[9px] font-black uppercase bg-yellow-400 text-black px-1.5 py-0.2 rounded-full shrink-0">LIVE</span>
                         </div>
-                      )}
+                        <p className="text-[11px] text-zinc-600 dark:text-zinc-300 font-semibold truncate mt-0.5">{s.destination}</p>
+                        <p className="text-[10px] text-zinc-400 mt-0.5">
+                          {Number.isNaN(timestamp.getTime()) ? "Recently" : timestamp.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        </p>
+                      </div>
                     </div>
-                  </div>
+                    <ChevronRight className="w-4 h-4 text-zinc-400 group-hover:text-black dark:group-hover:text-white transition-colors shrink-0" />
+                  </button>
                 );
               })}
             </div>
@@ -959,7 +936,7 @@ export function ContactsPage({
 
           {/* SHARED SESSION DETAIL MODAL */}
           {activeDetailSession && (
-            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
+            <div className="fixed inset-0 z-100 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
               <div className="bg-zinc-900 text-white border border-zinc-800 rounded-4xl p-6 w-full max-w-sm max-h-[90vh] overflow-y-auto space-y-5 relative shadow-2xl">
                 <button
                   onClick={() => setActiveDetailSession(null)}

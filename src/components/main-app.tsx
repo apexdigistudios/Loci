@@ -578,7 +578,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   return (
     <div className="min-h-screen bg-zinc-100/60 dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between max-w-md mx-auto w-full font-sans antialiased relative border-x border-zinc-200/50 dark:border-zinc-900 selection:bg-yellow-400 selection:text-black">
       {activeTab !== "session" && (
-        <header className="sticky top-0 z-30 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5 bg-white/70 dark:bg-black/70 backdrop-blur-3xl border-b border-zinc-200/40 dark:border-zinc-800/40 grid grid-cols-3 items-center">
+        <header className="sticky top-0 z-50 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5 bg-white/70 dark:bg-black/70 backdrop-blur-3xl border-b border-zinc-200/40 dark:border-zinc-800/40 grid grid-cols-3 items-center">
           <div className="text-left truncate leading-none">
             <span className="text-[11px] font-medium text-zinc-400 dark:text-zinc-500 block mb-0.5">
               Welcome,
@@ -713,7 +713,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         )}
       </main>
 
-      <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-104 p-1 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-3xl border border-zinc-200/40 dark:border-zinc-800/50 rounded-full shadow-2xl z-30 grid grid-cols-4 gap-1">
+      <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-104 p-1 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-3xl border border-zinc-200/40 dark:border-zinc-800/50 rounded-full shadow-2xl z-50 grid grid-cols-4 gap-1">
         <button
           onClick={() => setActiveTab("home")}
           className={`flex items-center justify-center space-x-1 py-2.5 rounded-full transition-all active:scale-95 ${

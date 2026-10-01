@@ -53,6 +53,11 @@ body {
   font-family: var(--font-sans), sans-serif;
 }
 
+.leaflet-container {
+  z-index: 0;
+  isolation: isolate;
+}
+
 .loci-leaflet-marker {
   background: transparent;
   border: 0;
