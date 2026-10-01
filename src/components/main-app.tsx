@@ -51,6 +51,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const [activeTab, setActiveTab] = useState<"home" | "session" | "contacts" | "share" | "profile">("home");
   const [nickname, setNickname] = useState("");
   const [fullName, setFullName] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
   const [activeSession, setActiveSession] = useState<ActiveSession | null>(null);
@@ -119,13 +120,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     try {
       const { data: userData } = await supabase
         .from("users")
-        .select("full_name, nickname")
+        .select("full_name, nickname, avatar_url")
         .eq("phone", userPhone)
         .maybeSingle();
 
       if (userData) {
         setFullName(userData.full_name || "");
         setNickname(userData.nickname || "");
+        setAvatarUrl(userData.avatar_url || "");
       }
 
       const { data: contactsData } = await supabase
@@ -138,14 +140,15 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         const phoneNumbers = contactsData.map((c) => c.phone);
         const { data: matchedUsers } = await supabase
           .from("users")
-          .select("phone")
+          .select("phone, avatar_url")
           .in("phone", phoneNumbers);
 
-        const lociPhonesSet = new Set((matchedUsers || []).map((u) => u.phone));
+        const userAvatarMap = new Map((matchedUsers || []).map((u) => [u.phone, u.avatar_url]));
 
         const formattedContacts: Contact[] = contactsData.map((c) => ({
           ...c,
-          isLociUser: lociPhonesSet.has(c.phone),
+          isLociUser: userAvatarMap.has(c.phone),
+          avatar_url: userAvatarMap.get(c.phone) || undefined,
         }));
 
         setContacts(formattedContacts);
@@ -192,7 +195,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     loadUserData();
   }, [loadUserData]);
 
-  // Global Supabase Realtime Listener for Friend Walk Notifications
+  // Global Supabase Realtime Listener
   useEffect(() => {
     if (contacts.length === 0) return;
     const contactPhones = contacts.map((c) => c.phone);
@@ -352,13 +355,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     if (!error && data) {
       const { data: matchedUser } = await supabase
         .from("users")
-        .select("phone")
+        .select("phone, avatar_url")
         .eq("phone", data.phone)
         .maybeSingle();
 
       const newContact: Contact = {
         ...data,
         isLociUser: !!matchedUser,
+        avatar_url: matchedUser?.avatar_url || undefined,
       };
 
       setContacts((prev) => [newContact, ...prev]);
@@ -401,14 +405,20 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           <div className="flex justify-end items-center">
             <button
               onClick={() => setActiveTab("profile")}
-              className={`p-1.5 rounded-full text-zinc-400 hover:text-black dark:hover:text-white transition-all active:scale-90 ${
+              className={`p-0.5 rounded-full transition-all active:scale-90 border ${
                 activeTab === "profile"
-                  ? "bg-yellow-400 text-black font-extrabold"
-                  : "bg-zinc-100/80 dark:bg-zinc-900/80"
+                  ? "border-yellow-400 p-1"
+                  : "border-transparent"
               }`}
               title="Profile & Settings"
             >
-              <User className="w-4 h-4" />
+              <div className="w-7 h-7 rounded-full overflow-hidden bg-zinc-900 text-yellow-400 font-extrabold text-xs flex items-center justify-center uppercase border border-yellow-400/40">
+                {avatarUrl ? (
+                  <img src={avatarUrl} alt="User Avatar" className="w-full h-full object-cover" />
+                ) : (
+                  <User className="w-4 h-4 text-zinc-400" />
+                )}
+              </div>
             </button>
           </div>
         </header>
@@ -492,6 +502,8 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
                 fullName={fullName}
                 nickname={nickname}
                 userPhone={userPhone}
+                avatarUrl={avatarUrl}
+                onAvatarChange={(url) => setAvatarUrl(url)}
                 notificationPermission={notificationPermission}
                 locationStatus={locationStatus}
                 locationCoords={locationCoords}

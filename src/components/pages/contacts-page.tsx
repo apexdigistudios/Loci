@@ -71,8 +71,8 @@ const DEFAULT_GROUPS = [
     key: "Emergency Circle",
     label: "Emergency Circle",
     image: "/pages/emergency.png",
-    accent: "from-red-950/60 via-zinc-900 to-black border-red-500/40 text-red-400",
-    badgeBg: "bg-red-500/20 text-red-300 border-red-500/40",
+    accent: "bg-zinc-900 border-red-500/40 text-red-400",
+    badgeBg: "bg-black/60 backdrop-blur-md text-red-300 border-red-500/40",
     desc: "First responders & primary emergency guardians",
     isDefault: true,
   },
@@ -80,8 +80,8 @@ const DEFAULT_GROUPS = [
     key: "Family",
     label: "Family",
     image: "/pages/family.png",
-    accent: "from-amber-950/60 via-zinc-900 to-black border-yellow-400/40 text-yellow-400",
-    badgeBg: "bg-yellow-400/20 text-yellow-300 border-yellow-400/40",
+    accent: "bg-zinc-900 border-yellow-400/40 text-yellow-400",
+    badgeBg: "bg-black/60 backdrop-blur-md text-yellow-300 border-yellow-400/40",
     desc: "Parents, siblings & immediate family",
     isDefault: true,
   },
@@ -89,8 +89,8 @@ const DEFAULT_GROUPS = [
     key: "Besties",
     label: "Besties",
     image: "/pages/besties.png",
-    accent: "from-zinc-800 via-zinc-900 to-black border-zinc-700/60 text-zinc-200",
-    badgeBg: "bg-zinc-800 text-zinc-300 border-zinc-700",
+    accent: "bg-zinc-900 border-zinc-700/60 text-zinc-200",
+    badgeBg: "bg-black/60 backdrop-blur-md text-zinc-300 border-zinc-700",
     desc: "Close friends, roommates & ride partners",
     isDefault: true,
   },
@@ -317,8 +317,8 @@ export function ContactsPage({
       key: cg.key,
       label: cg.label,
       image: cg.imageUrl || "",
-      accent: "from-zinc-800 via-zinc-900 to-black border-zinc-700/60 text-zinc-200",
-      badgeBg: "bg-zinc-800 text-zinc-300 border-zinc-700",
+      accent: "bg-zinc-900 border-zinc-700/60 text-zinc-200",
+      badgeBg: "bg-black/60 backdrop-blur-md text-zinc-300 border-zinc-700",
       desc: cg.desc,
       isDefault: false,
     })),
@@ -408,21 +408,21 @@ export function ContactsPage({
                   <img
                     src={activeGroupData.image}
                     alt={activeGroupData.label}
-                    className="absolute inset-0 w-full h-full object-cover opacity-40"
+                    className="absolute inset-0 w-full h-full object-cover"
                   />
                 ) : (
                   <div className="absolute top-0 right-0 p-6 opacity-10">
                     <Shield className="w-24 h-24 text-yellow-400" />
                   </div>
                 )}
-                <div className="absolute inset-0 bg-linear-to-t from-black via-black/50 to-transparent" />
+                <div className="absolute inset-0 bg-linear-to-t from-black/90 via-black/40 to-transparent pointer-events-none" />
 
                 <div className="relative z-10 space-y-0.5">
                   <span className="text-[10px] font-black uppercase text-yellow-400 tracking-wider">
                     Group Circle
                   </span>
-                  <h3 className="text-xl font-extrabold">{activeGroupView}</h3>
-                  <p className="text-xs text-zinc-300">
+                  <h3 className="text-xl font-extrabold text-white">{activeGroupView}</h3>
+                  <p className="text-xs text-zinc-200">
                     {groupContacts.length} Linked Guardians in this circle
                   </p>
                 </div>
@@ -501,7 +501,7 @@ export function ContactsPage({
                 </button>
               </div>
 
-              {/* Bento Grid with Custom Group Background Images & Delete Buttons */}
+              {/* Bento Grid with Crisp Background Images & Clean Vignette Overlay */}
               <div className="grid grid-cols-2 gap-3">
                 {allGroups.map((grp, idx) => {
                   const count = contacts.filter(
@@ -514,19 +514,20 @@ export function ContactsPage({
                     <div
                       key={grp.key}
                       onClick={() => setActiveGroupView(grp.key)}
-                      className={`p-4 rounded-[26px] bg-linear-to-br ${grp.accent} border backdrop-blur-xl relative overflow-hidden cursor-pointer active:scale-95 transition-all shadow-sm flex flex-col justify-between group ${
+                      className={`p-4 rounded-[26px] ${grp.accent} border relative overflow-hidden cursor-pointer active:scale-95 transition-all shadow-sm flex flex-col justify-between group ${
                         isWide ? "col-span-2 min-h-36" : "min-h-40"
                       }`}
                     >
-                      {/* Background Image Overlay */}
+                      {/* Background Image - Crisp and Clear */}
                       {grp.image && (
                         <img
                           src={grp.image}
                           alt={grp.label}
-                          className="absolute inset-0 w-full h-full object-cover opacity-35 group-hover:scale-105 transition-transform duration-500 pointer-events-none"
+                          className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 pointer-events-none"
                         />
                       )}
-                      <div className="absolute inset-0 bg-linear-to-t from-black via-black/40 to-transparent pointer-events-none" />
+                      {/* Clean Bottom Gradient for Text Legibility without Blurring Image */}
+                      <div className="absolute inset-0 bg-linear-to-t from-black/90 via-black/30 to-black/10 pointer-events-none" />
 
                       <div className="relative z-10 flex items-center justify-between">
                         <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border ${grp.badgeBg}`}>
@@ -536,7 +537,7 @@ export function ContactsPage({
                         {!grp.isDefault && (
                           <button
                             onClick={(e) => handleDeleteCustomGroup(grp.key, e)}
-                            className="p-1.5 rounded-full bg-black/60 text-zinc-400 hover:text-red-400 hover:bg-black/80 active:scale-90 transition-all border border-zinc-700/60"
+                            className="p-1.5 rounded-full bg-black/60 backdrop-blur-md text-zinc-300 hover:text-red-400 hover:bg-black/80 active:scale-90 transition-all border border-zinc-700/60"
                             title="Delete Custom Group"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -545,8 +546,8 @@ export function ContactsPage({
                       </div>
 
                       <div className="relative z-10 pt-4">
-                        <h3 className="text-sm font-black text-white">{grp.label}</h3>
-                        <p className="text-[10px] text-zinc-300 line-clamp-1 opacity-90">
+                        <h3 className="text-sm font-black text-white drop-shadow-md">{grp.label}</h3>
+                        <p className="text-[10px] text-zinc-200 line-clamp-1 opacity-90 drop-shadow-md">
                           {grp.desc}
                         </p>
                       </div>
