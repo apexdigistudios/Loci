@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Home, Shield, Users, Share2, User } from "lucide-react";
 import { useTheme } from "next-themes";
 import { supabase } from "@/lib/supabase";
@@ -78,46 +78,67 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const [addingContact, setAddingContact] = useState(false);
 
   const [locationCoords, setLocationCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [locationStatus, setLocationStatus] = useState<"idle" | "granted" | "denied">("idle");
+  const [locationStatus, setLocationStatus] = useState<"idle" | "requesting" | "granted" | "denied">("idle");
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
 
   const [dataLoading, setDataLoading] = useState(true);
   const [currentBanner, setCurrentBanner] = useState(0);
   const [mounted, setMounted] = useState(false);
   const { theme, resolvedTheme } = useTheme();
+  const notificationPermissionRequestRef = useRef<Promise<NotificationPermission> | null>(null);
+
+  const ensureNotificationPermission = useCallback(async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) return null;
+    if (Notification.permission !== "default") {
+      setNotificationPermission(Notification.permission);
+      return Notification.permission;
+    }
+    if (notificationPermissionRequestRef.current) return notificationPermissionRequestRef.current;
+
+    const permissionRequest = Notification.requestPermission()
+      .then((permission) => {
+        setNotificationPermission(permission);
+        return permission;
+      })
+      .catch((err: unknown) => {
+        console.error("Notification prompt error:", err);
+        return Notification.permission;
+      })
+      .finally(() => {
+        notificationPermissionRequestRef.current = null;
+      });
+    notificationPermissionRequestRef.current = permissionRequest;
+    return permissionRequest;
+  }, []);
 
   useEffect(() => {
     setMounted(true);
-    if (typeof window !== "undefined" && "Notification" in window) {
-      setNotificationPermission(Notification.permission);
-    }
-  }, []);
+    void ensureNotificationPermission();
+  }, [ensureNotificationPermission]);
 
   const triggerNotificationPrompt = async () => {
-    if (typeof window !== "undefined" && "Notification" in window) {
-      try {
-        const perm = await Notification.requestPermission();
-        setNotificationPermission(perm);
-      } catch (err) {
-        console.error("Notification prompt error:", err);
-      }
-    }
+    await ensureNotificationPermission();
   };
 
   const triggerLocationPrompt = () => {
-    if (typeof window !== "undefined" && "geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setLocationCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-          setLocationStatus("granted");
-        },
-        (err) => {
-          console.warn("Location permission error:", err);
-          setLocationStatus("denied");
-        },
-        { enableHighAccuracy: true }
-      );
+    if (typeof window === "undefined") return;
+    if (!("geolocation" in navigator)) {
+      setLocationStatus("denied");
+      return;
     }
+
+    setLocationStatus("requesting");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocationCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setLocationStatus("granted");
+      },
+      (err) => {
+        console.warn("Location permission error:", err);
+        setLocationStatus("denied");
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+    );
   };
 
   useEffect(() => {
@@ -211,7 +232,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   }, [loadUserData]);
 
   const fetchReceivedSessions = useCallback(async () => {
-    const contactPhones = contacts.map((contact) => contact.phone);
+    const contactPhones = [...new Set(contacts.map((contact) => contact.phone).filter((phone) => phone !== userPhone))];
     if (contactPhones.length === 0) {
       setReceivedSessions([]);
       return;
@@ -221,6 +242,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       .from("checkin_sessions")
       .select("id, user_phone, destination, expected_arrival_at, status")
       .in("user_phone", contactPhones)
+      .neq("user_phone", userPhone)
       .eq("status", "active")
       .order("created_at", { ascending: false });
 
@@ -236,7 +258,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       .in("phone", senderPhones);
 
     setReceivedSessions(
-      sessions.map((session) => {
+      sessions.filter((session) => session.user_phone !== userPhone).map((session) => {
         const contact = contacts.find((item) => item.phone === session.user_phone);
         const user = users?.find((item) => item.phone === session.user_phone);
         return {
@@ -255,9 +277,45 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     return () => clearTimeout(timer);
   }, [fetchReceivedSessions]);
 
+  const broadcastOverdueToContacts = useCallback(async (sessionId: string, destination: string) => {
+    await Promise.all(contacts.map((contact) => new Promise<void>((resolve) => {
+      const recipientPhone = contact.phone;
+      const channel = supabase.channel(`guardian-alert-${encodeURIComponent(recipientPhone)}`);
+      let sent = false;
+      let finished = false;
+      const timeout = setTimeout(finish, 5000);
+
+      function finish() {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timeout);
+        void supabase.removeChannel(channel);
+        resolve();
+      }
+
+      channel.subscribe((status) => {
+        if (status === "SUBSCRIBED" && !sent) {
+          sent = true;
+          void channel.send({
+            type: "broadcast",
+            event: "guardian_alert_due",
+            payload: {
+              sessionId,
+              recipientPhone,
+              destination,
+              message: "This session is overdue. Please check in with your guardian.",
+            },
+          }).then(finish, finish);
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          finish();
+        }
+      });
+    })));
+  }, [contacts]);
+
   // Global Realtime Sessions Listener
   useEffect(() => {
-    const contactPhones = contacts.map((c) => c.phone);
+    const contactPhones = contacts.map((contact) => contact.phone).filter((phone) => phone !== userPhone);
 
     const channel = supabase
       .channel("global_realtime_sessions")
@@ -272,22 +330,42 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           const newSession = payload.new as Partial<ReceivedSession>;
           const oldSession = payload.old as Partial<ReceivedSession>;
           const changedSession = newSession.user_phone ? newSession : oldSession;
+          const canNotify = typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted";
+
+          if (
+            payload.eventType === "UPDATE" &&
+            newSession.user_phone === userPhone &&
+            oldSession.status !== "escalated" &&
+            newSession.status === "escalated" &&
+            newSession.id
+          ) {
+            if (canNotify) {
+              new Notification("🚨 SAFETY ALERT", {
+                body: "🚨 SAFETY ALERT: Your session is overdue!",
+                icon: "/loci-dark.png",
+                tag: `overdue-session-${newSession.id}`,
+              });
+            }
+            void broadcastOverdueToContacts(newSession.id, newSession.destination || "your destination");
+          }
+
           if (changedSession.user_phone && contactPhones.includes(changedSession.user_phone)) {
             fetchReceivedSessions();
             const friendName = contacts.find((c) => c.phone === changedSession.user_phone)?.name || "A friend in your circle";
-            const canNotify = typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted";
 
             if (payload.eventType === "INSERT" && newSession.status === "active" && canNotify) {
-              new Notification("🚨 Circle Safety Alert", {
-                body: `${friendName} just started a live watch session heading to ${newSession.destination}!`,
+              new Notification("Loci Safety Alert", {
+                body: `🚨 ${friendName} started a live watch session heading to ${newSession.destination}.`,
                 icon: "/loci-dark.png",
+                tag: `session-start-${newSession.id}`,
               });
             }
 
             if (payload.eventType === "UPDATE" && oldSession.status !== "completed" && newSession.status === "completed" && canNotify) {
-              new Notification("🛡️ Session Completed", {
-                body: `🛡️ ${friendName} completed their safety session safely.`,
+              new Notification("Loci Session Completed", {
+                body: `🛡️ ${friendName} completed their journey safely.`,
                 icon: "/loci-dark.png",
+                tag: `session-completed-${newSession.id}`,
               });
             }
 
@@ -331,18 +409,10 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       supabase.removeChannel(channel);
       supabase.removeChannel(alertChannel);
     };
-  }, [contacts, fetchReceivedSessions, userPhone]);
+  }, [contacts, fetchReceivedSessions, userPhone, broadcastOverdueToContacts]);
 
   useEffect(() => {
     if (!activeSession) return;
-
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-      new Notification("🛡️ Loci Active Watch Session", {
-        body: `Journey to ${activeSession.destination} in progress. Guardians are watching.`,
-        icon: "/loci-dark.png",
-        tag: "active-loci-session",
-      });
-    }
 
     const titleInterval = setInterval(() => {
       if (typeof document !== "undefined") {
@@ -366,6 +436,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
   const handleStartSession = async (e: React.FormEvent) => {
     e.preventDefault();
+    const notificationPermission = await ensureNotificationPermission();
     const finalMins = Number(durationMinutes) || 30;
     const destName = destination.trim() || "Destination Check-In";
 
@@ -380,6 +451,13 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     setActiveSession(tempSession);
     if (typeof window !== "undefined") {
       localStorage.setItem("loci_active_session", JSON.stringify(tempSession));
+    }
+    if (notificationPermission === "granted") {
+      new Notification("Loci Session Started", {
+        body: `Your live watch session started heading to ${destName}.`,
+        icon: "/loci-dark.png",
+        tag: "active-loci-session",
+      });
     }
     setActiveTab("session");
     setSessionLoading(true);
@@ -546,6 +624,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
                 contacts={contacts}
                 activeSession={activeSession}
                 receivedSessions={receivedSessions}
+                currentUserPhone={userPhone}
                 currentBanner={currentBanner}
                 setCurrentBanner={setCurrentBanner}
                 banners={BANNERS}

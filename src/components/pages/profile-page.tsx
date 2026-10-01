@@ -27,7 +27,7 @@ interface ProfilePageProps {
   avatarUrl?: string;
   onAvatarChange?: (url: string) => void;
   notificationPermission: NotificationPermission;
-  locationStatus: "idle" | "granted" | "denied";
+  locationStatus: "idle" | "requesting" | "granted" | "denied";
   locationCoords: { lat: number; lng: number } | null;
   triggerNotificationPrompt: () => void;
   triggerLocationPrompt: () => void;
@@ -355,12 +355,19 @@ export function ProfilePage({
                 <p className="text-[9px] text-zinc-400">Reset in browser settings</p>
               </div>
             ) : (
-              <button
-                onClick={triggerLocationPrompt}
-                className="bg-yellow-400 text-black font-black px-3 py-1.5 rounded-full text-xs active:scale-95 transition-all shadow-sm"
-              >
-                Allow 📍
-              </button>
+              locationStatus === "requesting" ? (
+                <span className="inline-flex items-center space-x-1.5 text-[10px] font-black text-yellow-500">
+                  <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+                  <span>Acquiring GPS Signal...</span>
+                </span>
+              ) : (
+                <button
+                  onClick={triggerLocationPrompt}
+                  className="bg-yellow-400 text-black font-black px-3 py-1.5 rounded-full text-xs active:scale-95 transition-all shadow-sm"
+                >
+                  Allow 📍
+                </button>
+              )
             )}
           </div>
         </div>

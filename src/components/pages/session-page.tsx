@@ -19,6 +19,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { SatelliteMap } from "@/components/ui/satellite-map";
 
 interface Contact {
   id: string;
@@ -79,15 +80,13 @@ export function SessionPage({
 
   const [isCameraActive, setIsCameraActive] = useState(false);
 
-  // Requirement 1: Return Date & Time Selector State
-  const [selectedDayOffset, setSelectedDayOffset] = useState<number>(0); // 0 = Today, 1 = Tomorrow, 2 = Day After...
+  const [selectedDayOffset, setSelectedDayOffset] = useState<number>(0);
   const [returnTimeStr, setReturnTimeStr] = useState<string>(() => {
     const now = new Date();
     now.setMinutes(now.getMinutes() + 30);
     return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   });
 
-  // Requirement 2: Realtime Alert Timers Countdown & Notification Triggers
   const [targetEndTime, setTargetEndTime] = useState<number | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState<number>(0);
 
@@ -103,6 +102,7 @@ export function SessionPage({
   const [reminderNotificationFired, setReminderNotificationFired] = useState(false);
   const guardianNotificationFiredRef = useRef(false);
   const [contactSelectionMode, setContactSelectionMode] = useState<"individual" | "groups">("individual");
+
   const [locationCoords, setLocationCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locationStatus, setLocationStatus] = useState<"idle" | "requesting" | "granted" | "denied">("idle");
   const [locationUpdatedAt, setLocationUpdatedAt] = useState<Date | null>(null);
@@ -110,6 +110,7 @@ export function SessionPage({
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
+  const locationWatchIdRef = useRef<number | null>(null);
 
   const sharedContacts = useMemo(
     () => contacts.filter((c) => selectedContactIds.includes(c.id)),
@@ -163,11 +164,27 @@ export function SessionPage({
     }
 
     setLocationStatus("requesting");
-    navigator.geolocation.getCurrentPosition(
+    if (locationWatchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(locationWatchIdRef.current);
+    }
+    locationWatchIdRef.current = navigator.geolocation.watchPosition(
       ({ coords }) => {
-        setLocationCoords({ latitude: coords.latitude, longitude: coords.longitude });
+        const latitude = coords.latitude;
+        const longitude = coords.longitude;
+        setLocationCoords({ latitude, longitude });
         setLocationUpdatedAt(new Date());
         setLocationStatus("granted");
+
+        if (activeSession && !activeSession.id.startsWith("local-")) {
+          void supabase
+            .from("checkin_sessions")
+            .update({ current_lat: latitude, current_lng: longitude })
+            .eq("id", activeSession.id)
+            .eq("status", "active")
+            .then(({ error }) => {
+              if (error) console.error("Failed to update live session location:", error);
+            });
+        }
       },
       () => setLocationStatus("denied"),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
@@ -175,23 +192,15 @@ export function SessionPage({
   };
 
   useEffect(() => {
-    if (!activeSession || !navigator.geolocation) return;
+    if (!activeSession) return;
 
-    const updateLocation = () => {
-      navigator.geolocation.getCurrentPosition(
-        ({ coords }) => {
-          setLocationCoords({ latitude: coords.latitude, longitude: coords.longitude });
-          setLocationUpdatedAt(new Date());
-          setLocationStatus("granted");
-        },
-        () => setLocationStatus("denied"),
-        { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
-      );
+    requestCurrentLocation();
+    return () => {
+      if (locationWatchIdRef.current !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(locationWatchIdRef.current);
+        locationWatchIdRef.current = null;
+      }
     };
-
-    updateLocation();
-    const interval = setInterval(updateLocation, 5 * 60 * 1000);
-    return () => clearInterval(interval);
   }, [activeSession]);
 
   // Dynamic Day Options for Return Picker
@@ -255,9 +264,10 @@ export function SessionPage({
         if (Date.now() >= guardianDueAt && !guardianNotificationFiredRef.current) {
           guardianNotificationFiredRef.current = true;
           if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-            new Notification("🚨 Guardian Alert Escalated", {
-              body: "Your session is overdue.",
+            new Notification("🚨 SAFETY ALERT", {
+              body: "🚨 SAFETY ALERT: Your session is overdue!",
               icon: "/loci-dark.png",
+              tag: `overdue-session-${activeSession?.id || "active"}`,
             });
           }
           void dispatchGuardianBroadcast("guardian_alert_due", {
@@ -572,8 +582,8 @@ export function SessionPage({
                           ? `${locationCoords.latitude.toFixed(5)}, ${locationCoords.longitude.toFixed(5)}`
                           : locationStatus === "denied"
                             ? "Location permission unavailable"
-                            : locationStatus === "requesting"
-                              ? "Requesting GPS location..."
+                            : locationStatus === "requesting" || locationStatus === "idle"
+                              ? "Acquiring GPS Signal..."
                               : "Waiting for GPS permission"}
                       </p>
                     </div>
@@ -583,7 +593,7 @@ export function SessionPage({
                     onClick={requestCurrentLocation}
                     className="shrink-0 text-[10px] font-extrabold text-black dark:text-white px-3 py-2 rounded-full bg-yellow-400 hover:bg-yellow-300 transition-colors"
                   >
-                    {locationStatus === "granted" ? "Refresh" : "Enable location"}
+                    {locationStatus === "requesting" ? "Acquiring..." : locationStatus === "granted" ? "Refresh" : "Enable location"}
                   </button>
                 </div>
                 {locationUpdatedAt && (
@@ -594,12 +604,7 @@ export function SessionPage({
               </div>
 
               {locationCoords && (
-                <iframe
-                  title="Live location map"
-                  loading="lazy"
-                  className="w-full h-52 rounded-2xl border border-zinc-200/70 dark:border-zinc-800"
-                  src={`https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(`${locationCoords.longitude - 0.01},${locationCoords.latitude - 0.01},${locationCoords.longitude + 0.01},${locationCoords.latitude + 0.01}`)}&layer=mapnik&marker=${locationCoords.latitude}%2C${locationCoords.longitude}`}
-                />
+                <SatelliteMap latitude={locationCoords.latitude} longitude={locationCoords.longitude} />
               )}
             </div>
           </div>

@@ -21,6 +21,7 @@ interface ActiveSession {
 
 interface ReceivedSession {
   id: string;
+  user_phone: string;
   friendName: string;
   avatarUrl?: string;
   destination: string;
@@ -31,6 +32,7 @@ interface HomePageProps {
   contacts: Contact[];
   activeSession: ActiveSession | null;
   receivedSessions: ReceivedSession[];
+  currentUserPhone: string;
   currentBanner: number;
   setCurrentBanner: (i: number) => void;
   banners: Array<{ id: number; tag: string; title: string; desc: string; bg: string }>;
@@ -44,6 +46,7 @@ export function HomePage({
   contacts,
   activeSession,
   receivedSessions,
+  currentUserPhone,
   currentBanner,
   setCurrentBanner,
   banners,
@@ -52,6 +55,7 @@ export function HomePage({
   handleCompleteSession,
   onNavigate,
 }: HomePageProps) {
+  const circleSessions = receivedSessions.filter((session) => session.user_phone !== currentUserPhone);
   const [remainingSeconds, setRemainingSeconds] = useState(0);
 
   useEffect(() => {
@@ -229,18 +233,18 @@ export function HomePage({
         </div>
       )}
 
-      {receivedSessions.length > 0 && (
+      {circleSessions.length > 0 && (
         <section className="space-y-2.5">
           <div className="flex items-center justify-between px-1">
             <h2 className="text-xs font-black uppercase tracking-wider text-black dark:text-white">
               Live Sessions From Your Circle
             </h2>
             <span className="text-[10px] bg-yellow-400 text-black px-1.5 py-0.5 rounded-full font-black">
-              {receivedSessions.length}
+              {circleSessions.length}
             </span>
           </div>
           <div className="space-y-2">
-            {receivedSessions.map((session) => (
+            {circleSessions.map((session) => (
               <div key={session.id} className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-2xl border border-zinc-200/50 dark:border-zinc-800/50 rounded-2xl p-3.5 shadow-sm space-y-3">
                 <div className="flex items-center space-x-3">
                   <div className="w-10 h-10 rounded-full overflow-hidden shrink-0 bg-zinc-900 text-yellow-400 border border-yellow-400/70 font-black text-xs flex items-center justify-center uppercase">

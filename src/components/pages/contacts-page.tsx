@@ -22,6 +22,7 @@ import {
   Image as ImageIcon,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { SatelliteMap } from "@/components/ui/satellite-map";
 
 export interface Contact {
   id: string;
@@ -61,8 +62,8 @@ function getSessionCoordinates(session: SharedSession) {
     return Number.isFinite(coordinate) ? coordinate : null;
   };
   const geoJsonCoordinates = Array.isArray(location.coordinates) ? location.coordinates : [];
-  const latitude = readCoordinate(row.latitude, row.lat, row.location_latitude, row.last_latitude, location.latitude, location.lat, geoJsonCoordinates[1]);
-  const longitude = readCoordinate(row.longitude, row.lng, row.location_longitude, row.last_longitude, location.longitude, location.lng, geoJsonCoordinates[0]);
+  const latitude = readCoordinate(row.current_lat, row.latitude, row.lat, row.location_latitude, row.last_latitude, location.latitude, location.lat, geoJsonCoordinates[1]);
+  const longitude = readCoordinate(row.current_lng, row.longitude, row.lng, row.location_longitude, row.last_longitude, location.longitude, location.lng, geoJsonCoordinates[0]);
 
   return latitude !== null && longitude !== null && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180
     ? { latitude, longitude }
@@ -198,40 +199,89 @@ export function ContactsPage({
   const fetchSharedSessions = useCallback(async () => {
     setSessionsLoading(true);
     try {
-      const participantPhones = [...new Set([...contacts.map((c) => c.phone), userPhone])];
+      const participantPhones = [...new Set(contacts.map((contact) => contact.phone).filter((phone) => phone !== userPhone))];
+      const [activeResponse, ownHistoryResponse, recipientResponse, contactResponse] = await Promise.all([
+        participantPhones.length > 0
+          ? supabase
+              .from("checkin_sessions")
+              .select("*")
+              .in("user_phone", participantPhones)
+              .neq("user_phone", userPhone)
+              .eq("status", "active")
+              .order("created_at", { ascending: false })
+          : Promise.resolve({ data: [], error: null }),
+        supabase
+          .from("checkin_sessions")
+          .select("*")
+          .eq("user_phone", userPhone)
+          .neq("status", "active")
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("session_recipients")
+          .select("session_id")
+          .eq("recipient_phone", userPhone),
+        supabase
+          .from("session_recipients")
+          .select("session_id")
+          .eq("contact_phone", userPhone),
+      ]);
 
-      const { data, error } = await supabase
-        .from("checkin_sessions")
-        .select("*")
-        .in("user_phone", participantPhones)
-        .order("created_at", { ascending: false });
+      if (activeResponse.error) console.error("Error fetching active shared sessions:", activeResponse.error);
+      if (ownHistoryResponse.error) console.error("Error fetching own session history:", ownHistoryResponse.error);
+      if (recipientResponse.error) console.error("Error fetching recipient session links:", recipientResponse.error);
+      if (contactResponse.error) console.error("Error fetching contact session links:", contactResponse.error);
 
-      if (!error && data) {
-        const senderPhones = Array.from(new Set(data.map((s) => s.user_phone)));
+      const linkedSessionIds = Array.from(new Set([
+        ...(recipientResponse.data || []).map((row) => row.session_id),
+        ...(contactResponse.data || []).map((row) => row.session_id),
+      ].filter((id): id is string => !!id)));
 
-        const { data: usersData } = await supabase
-          .from("users")
-          .select("phone, nickname, full_name, avatar_url")
-          .in("phone", senderPhones.length > 0 ? senderPhones : ["none"]);
+      const { data: linkedHistoryRows, error: linkedHistoryError } = linkedSessionIds.length > 0
+        ? await supabase
+            .from("checkin_sessions")
+            .select("*")
+            .in("id", linkedSessionIds)
+            .neq("status", "active")
+            .order("created_at", { ascending: false })
+        : { data: [], error: null };
 
-        const formatted = data.map((session) => {
-          const matchedUser = usersData?.find((u) => u.phone === session.user_phone);
-          return {
-            ...session,
-            user: matchedUser
-              ? { nickname: matchedUser.nickname, full_name: matchedUser.full_name, avatar_url: matchedUser.avatar_url }
-              : undefined,
-          } as SharedSession;
-        });
+      if (linkedHistoryError) console.error("Error fetching linked session history:", linkedHistoryError);
 
-        const now = Date.now();
-        setSharedSessions(formatted.filter((session) =>
-          session.status === "active" && new Date(session.expected_arrival_at).getTime() >= now
-        ));
-        setHistorySessions(formatted.filter((session) =>
-          session.status !== "active" || new Date(session.expected_arrival_at).getTime() < now
-        ));
+      const activeRows = (activeResponse.data || []).filter((session) => session.user_phone !== userPhone);
+      const historyById = new Map<string, Record<string, unknown>>();
+      for (const session of [...(ownHistoryResponse.data || []), ...(linkedHistoryRows || [])]) {
+        if (session.status !== "active") historyById.set(session.id, session);
       }
+      const historyRows = Array.from(historyById.values());
+      const sessionRows = [...activeRows, ...historyRows];
+      const senderPhones = Array.from(new Set(sessionRows.map((session) => session.user_phone as string)));
+
+      const { data: usersData } = await supabase
+        .from("users")
+        .select("phone, nickname, full_name, avatar_url")
+        .in("phone", senderPhones.length > 0 ? senderPhones : ["none"]);
+
+      const formatSession = (session: Record<string, unknown>) => {
+        const matchedUser = usersData?.find((user) => user.phone === session.user_phone);
+        return {
+          ...session,
+          user: matchedUser
+            ? { nickname: matchedUser.nickname, full_name: matchedUser.full_name, avatar_url: matchedUser.avatar_url }
+            : undefined,
+        } as unknown as SharedSession;
+      };
+      const formattedActive = activeRows.map(formatSession);
+      const formattedHistory = historyRows.map(formatSession);
+      const now = Date.now();
+
+      setSharedSessions(formattedActive.filter((session) =>
+        new Date(session.expected_arrival_at).getTime() >= now
+      ));
+      setHistorySessions(formattedHistory);
+      setActiveDetailSession((current) => current
+        ? [...formattedActive, ...formattedHistory].find((session) => session.id === current.id) || current
+        : null
+      );
     } catch (err) {
       console.error("Error fetching shared sessions:", err);
     } finally {
@@ -374,6 +424,9 @@ export function ContactsPage({
   const groupContacts = contacts.filter(
     (c) => (c.group_category || "Emergency Circle") === activeGroupView
   );
+  const activeDetailCoordinates = activeDetailSession
+    ? getSessionCoordinates(activeDetailSession)
+    : null;
 
   return (
     <div className="space-y-5">
@@ -832,11 +885,10 @@ export function ContactsPage({
                         <p className="text-[11px] text-zinc-500 dark:text-zinc-400 line-clamp-2">{s.notes}</p>
                       )}
                       {coordinates ? (
-                        <iframe
-                          title={`${displayName}'s last reported location`}
-                          loading="lazy"
-                          className="w-full h-36 rounded-xl border border-zinc-200 dark:border-zinc-800 pointer-events-none"
-                          src={`https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(`${coordinates.longitude - 0.01},${coordinates.latitude - 0.01},${coordinates.longitude + 0.01},${coordinates.latitude + 0.01}`)}&layer=mapnik&marker=${coordinates.latitude}%2C${coordinates.longitude}`}
+                        <SatelliteMap
+                          latitude={coordinates.latitude}
+                          longitude={coordinates.longitude}
+                          className="h-36 rounded-xl pointer-events-none"
                         />
                       ) : (
                         <div className="h-12 rounded-xl bg-zinc-100 dark:bg-zinc-800/70 flex items-center px-3 text-[10px] font-medium text-zinc-500 dark:text-zinc-400">
@@ -948,6 +1000,14 @@ export function ContactsPage({
                     <ShieldAlert className="w-5 h-5 text-black" />
                   </div>
                 </div>
+
+                {activeDetailCoordinates && (
+                  <SatelliteMap
+                    latitude={activeDetailCoordinates.latitude}
+                    longitude={activeDetailCoordinates.longitude}
+                    className="h-40 rounded-xl"
+                  />
+                )}
 
                 <div className="grid grid-cols-2 gap-3 text-[11px]">
                   <div className="bg-zinc-800/80 rounded-xl p-3">
