@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { User, UserCheck, Phone, Mail, Lock, ArrowRight, Loader2 } from "lucide-react";
+import { User, UserCheck, Phone, Mail, Lock, ArrowRight, Loader2, LogIn } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
 export interface UserData {
@@ -39,16 +39,42 @@ const COUNTRIES: CountryInfo[] = [
 ];
 
 export function Login({ onSuccess }: LoginProps) {
+  const [isSignUp, setIsSignUp] = useState(false);
+
+  // Signup fields
   const [fullName, setFullName] = useState("");
   const [nickname, setNickname] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
+  // Phone field (shared)
   const [phone, setPhone] = useState("");
   const [detectedCountry, setDetectedCountry] = useState<CountryInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Auto Checker: Check returning session / stored phone on mount
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedUser = localStorage.getItem("loci_user_profile");
+      if (savedUser) {
+        try {
+          const parsed = JSON.parse(savedUser);
+          if (parsed.phone) {
+            onSuccess(parsed);
+            return;
+          }
+        } catch (e) {
+          localStorage.removeItem("loci_user_profile");
+        }
+      }
+
+      const savedPhone = localStorage.getItem("loci_saved_phone");
+      if (savedPhone) {
+        setPhone(savedPhone);
+      }
+    }
+
     try {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (tz.includes("Accra") || tz.includes("Ghana")) {
@@ -65,7 +91,7 @@ export function Login({ onSuccess }: LoginProps) {
     } catch {
       setDetectedCountry(COUNTRIES[0]);
     }
-  }, []);
+  }, [onSuccess]);
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -80,7 +106,60 @@ export function Login({ onSuccess }: LoginProps) {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Single-Field Phone Login
+  const handlePhoneLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+
+    let formattedPhone = phone.trim();
+    if (detectedCountry && !formattedPhone.startsWith("+")) {
+      const digitsOnly = formattedPhone.replace(/^0+/, "");
+      formattedPhone = `${detectedCountry.prefix}${digitsOnly}`;
+    }
+
+    if (!formattedPhone) return;
+
+    setLoading(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("users")
+        .select("full_name, nickname, phone")
+        .eq("phone", formattedPhone)
+        .maybeSingle();
+
+      setLoading(false);
+
+      if (error) {
+        setErrorMessage(error.message);
+        return;
+      }
+
+      if (!data) {
+        setErrorMessage("No account found with this phone number. Please create a profile.");
+        return;
+      }
+
+      const userData: UserData = {
+        fullName: data.full_name || "",
+        nickname: data.nickname || "",
+        phone: data.phone,
+      };
+
+      if (typeof window !== "undefined") {
+        localStorage.setItem("loci_user_profile", JSON.stringify(userData));
+        localStorage.setItem("loci_saved_phone", formattedPhone);
+      }
+
+      onSuccess(userData);
+    } catch (err) {
+      setLoading(false);
+      setErrorMessage("Failed to authenticate. Please try again.");
+    }
+  };
+
+  // Full Signup Submission
+  const handleSignUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
 
@@ -98,7 +177,6 @@ export function Login({ onSuccess }: LoginProps) {
 
     setLoading(true);
 
-    // 1. Authenticate with Supabase Auth (creates user in auth.users)
     const { data: authData, error: signUpError } = await supabase.auth.signUp({
       email: trimmedEmail,
       password: password,
@@ -113,7 +191,6 @@ export function Login({ onSuccess }: LoginProps) {
 
     let authUser = authData?.user;
 
-    // If existing account, attempt login with password
     if (signUpError && signUpError.message.toLowerCase().includes("already registered")) {
       const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
         email: trimmedEmail,
@@ -132,7 +209,6 @@ export function Login({ onSuccess }: LoginProps) {
       return;
     }
 
-    // 2. Save/Update user profile in public.users table
     const { error: dbError } = await supabase.from("users").upsert(
       {
         id: authUser?.id,
@@ -141,7 +217,7 @@ export function Login({ onSuccess }: LoginProps) {
         email: trimmedEmail,
         phone: formattedPhone,
       },
-      { onConflict: "email" }
+      { onConflict: "phone" }
     );
 
     setLoading(false);
@@ -151,11 +227,18 @@ export function Login({ onSuccess }: LoginProps) {
       return;
     }
 
-    onSuccess({
+    const userData: UserData = {
       fullName: trimmedFullName,
       nickname: trimmedNickname,
       phone: formattedPhone,
-    });
+    };
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem("loci_user_profile", JSON.stringify(userData));
+      localStorage.setItem("loci_saved_phone", formattedPhone);
+    }
+
+    onSuccess(userData);
   };
 
   return (
@@ -164,142 +247,214 @@ export function Login({ onSuccess }: LoginProps) {
       <div className="pt-6">
         <img src="/logo.png" alt="Loci Logo" className="h-10 w-auto object-contain mb-4" />
         <h1 className="text-2xl font-extrabold tracking-tight text-black dark:text-white">
-          Create Your Loci Profile
+          {isSignUp ? "Create Your Loci Profile" : "Welcome Back"}
         </h1>
         <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1.5 leading-relaxed">
-          Set up your identity before starting safety check-ins.
+          {isSignUp
+            ? "Set up your identity before starting safety check-ins."
+            : "Enter your phone number to sign in instantly."}
         </p>
       </div>
 
-      {/* Form */}
-      <form onSubmit={handleSubmit} className="my-auto py-4 space-y-4">
-        {errorMessage && (
-          <div className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
-            {errorMessage}
-          </div>
-        )}
+      {/* Forms */}
+      {isSignUp ? (
+        /* FULL SIGN UP FORM */
+        <form onSubmit={handleSignUpSubmit} className="my-auto py-4 space-y-4">
+          {errorMessage && (
+            <div className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
+              {errorMessage}
+            </div>
+          )}
 
-        {/* 1. Full Name */}
-        <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
-            Full Name
-          </label>
-          <div className="relative flex items-center">
-            <User className="w-4 h-4 absolute left-4 text-zinc-400" />
-            <input
-              type="text"
-              required
-              disabled={loading}
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
-            />
-          </div>
-        </div>
-
-        {/* 2. Nickname */}
-        <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
-            Nickname (Known to contacts)
-          </label>
-          <div className="relative flex items-center">
-            <UserCheck className="w-4 h-4 absolute left-4 text-zinc-400" />
-            <input
-              type="text"
-              required
-              disabled={loading}
-              value={nickname}
-              onChange={(e) => setNickname(e.target.value)}
-              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
-            />
-          </div>
-        </div>
-
-        {/* 3. Email Address (Auth Login) */}
-        <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
-            Email Address
-          </label>
-          <div className="relative flex items-center">
-            <Mail className="w-4 h-4 absolute left-4 text-zinc-400" />
-            <input
-              type="email"
-              required
-              disabled={loading}
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
-            />
-          </div>
-        </div>
-
-        {/* 4. Password */}
-        <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
-            Password
-          </label>
-          <div className="relative flex items-center">
-            <Lock className="w-4 h-4 absolute left-4 text-zinc-400" />
-            <input
-              type="password"
-              required
-              minLength={6}
-              disabled={loading}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
-            />
-          </div>
-        </div>
-
-        {/* 5. Phone Number */}
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-              Mobile Phone Number
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
+              Full Name
             </label>
-            {detectedCountry && (
-              <span className="inline-flex items-center space-x-1 text-[10px] font-extrabold bg-yellow-400 text-black px-2 py-0.5 rounded-md">
-                <span>{detectedCountry.flag}</span>
-                <span>{detectedCountry.country}</span>
-                <span>({detectedCountry.prefix})</span>
-              </span>
-            )}
+            <div className="relative flex items-center">
+              <User className="w-4 h-4 absolute left-4 text-zinc-400" />
+              <input
+                type="text"
+                required
+                disabled={loading}
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+              />
+            </div>
           </div>
-          <div className="relative flex items-center">
-            <Phone className="w-4 h-4 absolute left-4 text-zinc-400" />
-            <input
-              type="tel"
-              required
-              disabled={loading}
-              value={phone}
-              onChange={handlePhoneChange}
-              placeholder={detectedCountry ? `${detectedCountry.prefix} ...` : "+..."}
-              className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
-            />
-          </div>
-        </div>
 
-        {/* Yellow Action Button */}
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
+              Nickname (Known to contacts)
+            </label>
+            <div className="relative flex items-center">
+              <UserCheck className="w-4 h-4 absolute left-4 text-zinc-400" />
+              <input
+                type="text"
+                required
+                disabled={loading}
+                value={nickname}
+                onChange={(e) => setNickname(e.target.value)}
+                className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
+              Email Address
+            </label>
+            <div className="relative flex items-center">
+              <Mail className="w-4 h-4 absolute left-4 text-zinc-400" />
+              <input
+                type="email"
+                required
+                disabled={loading}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
+              Password
+            </label>
+            <div className="relative flex items-center">
+              <Lock className="w-4 h-4 absolute left-4 text-zinc-400" />
+              <input
+                type="password"
+                required
+                minLength={6}
+                disabled={loading}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                Mobile Phone Number
+              </label>
+              {detectedCountry && (
+                <span className="inline-flex items-center space-x-1 text-[10px] font-extrabold bg-yellow-400 text-black px-2 py-0.5 rounded-md">
+                  <span>{detectedCountry.flag}</span>
+                  <span>{detectedCountry.country}</span>
+                  <span>({detectedCountry.prefix})</span>
+                </span>
+              )}
+            </div>
+            <div className="relative flex items-center">
+              <Phone className="w-4 h-4 absolute left-4 text-zinc-400" />
+              <input
+                type="tel"
+                required
+                disabled={loading}
+                value={phone}
+                onChange={handlePhoneChange}
+                placeholder={detectedCountry ? `${detectedCountry.prefix} ...` : "+..."}
+                className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+              />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50 mt-2"
+          >
+            {loading ? (
+              <Loader2 className="w-4 h-4 animate-spin text-black" />
+            ) : (
+              <>
+                <span>Save Profile &amp; Continue</span>
+                <ArrowRight className="w-4 h-4 text-black" />
+              </>
+            )}
+          </button>
+        </form>
+      ) : (
+        /* SINGLE FIELD PHONE LOGIN FORM */
+        <form onSubmit={handlePhoneLogin} className="my-auto py-4 space-y-4">
+          {errorMessage && (
+            <div className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
+              {errorMessage}
+            </div>
+          )}
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                Mobile Phone Number
+              </label>
+              {detectedCountry && (
+                <span className="inline-flex items-center space-x-1 text-[10px] font-extrabold bg-yellow-400 text-black px-2 py-0.5 rounded-md">
+                  <span>{detectedCountry.flag}</span>
+                  <span>{detectedCountry.country}</span>
+                  <span>({detectedCountry.prefix})</span>
+                </span>
+              )}
+            </div>
+            <div className="relative flex items-center">
+              <Phone className="w-4 h-4 absolute left-4 text-zinc-400" />
+              <input
+                type="tel"
+                required
+                disabled={loading}
+                value={phone}
+                onChange={handlePhoneChange}
+                placeholder={detectedCountry ? `${detectedCountry.prefix} ...` : "+..."}
+                className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
+              />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50 mt-2"
+          >
+            {loading ? (
+              <Loader2 className="w-4 h-4 animate-spin text-black" />
+            ) : (
+              <>
+                <LogIn className="w-4 h-4 text-black" />
+                <span>Log In</span>
+              </>
+            )}
+          </button>
+        </form>
+      )}
+
+      {/* Switcher Link */}
+      <div className="text-center pt-2">
         <button
-          type="submit"
-          disabled={loading}
-          className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50 mt-2"
+          type="button"
+          onClick={() => {
+            setErrorMessage(null);
+            setIsSignUp(!isSignUp);
+          }}
+          className="text-xs font-bold text-zinc-500 hover:text-black dark:hover:text-white transition-colors"
         >
-          {loading ? (
-            <Loader2 className="w-4 h-4 animate-spin text-black" />
+          {isSignUp ? (
+            <span>
+              Already have an account? <strong className="text-yellow-500 underline">Log In</strong>
+            </span>
           ) : (
-            <>
-              <span>Save Profile &amp; Continue</span>
-              <ArrowRight className="w-4 h-4 text-black" />
-            </>
+            <span>
+              Don't have an account? <strong className="text-yellow-500 underline">Create Profile</strong>
+            </span>
           )}
         </button>
-      </form>
+      </div>
 
-      <p className="text-[11px] text-zinc-400 dark:text-zinc-600 text-center pb-2">
+      <p className="text-[11px] text-zinc-400 dark:text-zinc-600 text-center pb-2 mt-2">
         Loci safety check-ins require explicit consent. No continuous tracking.
       </p>
     </div>
