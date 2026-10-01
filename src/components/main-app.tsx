@@ -115,6 +115,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     return () => clearInterval(timer);
   }, []);
 
+  // Fetch contacts and cross-match their profile DPs dynamically
   const loadUserData = useCallback(async () => {
     setDataLoading(true);
     try {
@@ -143,7 +144,9 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           .select("phone, avatar_url")
           .in("phone", phoneNumbers);
 
-        const userAvatarMap = new Map((matchedUsers || []).map((u) => [u.phone, u.avatar_url]));
+        const userAvatarMap = new Map(
+          (matchedUsers || []).map((u) => [u.phone, u.avatar_url])
+        );
 
         const formattedContacts: Contact[] = contactsData.map((c) => ({
           ...c,
@@ -195,7 +198,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     loadUserData();
   }, [loadUserData]);
 
-  // Global Supabase Realtime Listener
+  // Global Realtime Sessions Listener
   useEffect(() => {
     if (contacts.length === 0) return;
     const contactPhones = contacts.map((c) => c.phone);
@@ -230,7 +233,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     };
   }, [contacts]);
 
-  // System Notification Sync
   useEffect(() => {
     if (!activeSession) return;
 
@@ -386,7 +388,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
   return (
     <div className="min-h-screen bg-zinc-100/60 dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between max-w-md mx-auto w-full font-sans antialiased relative border-x border-zinc-200/50 dark:border-zinc-900 selection:bg-yellow-400 selection:text-black">
-      {/* Top Header */}
       {activeTab !== "session" && (
         <header className="sticky top-0 z-30 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5 bg-white/70 dark:bg-black/70 backdrop-blur-3xl border-b border-zinc-200/40 dark:border-zinc-800/40 grid grid-cols-3 items-center">
           <div className="text-left truncate leading-none">
@@ -424,7 +425,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         </header>
       )}
 
-      {/* Main Tab Views */}
       <main className="flex-1 px-4 py-5 space-y-5 pb-28">
         {dataLoading ? (
           <div className="space-y-5 animate-pulse">
@@ -516,7 +516,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         )}
       </main>
 
-      {/* Persistent Bottom Navbar */}
       <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-104 p-1 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-3xl border border-zinc-200/40 dark:border-zinc-800/50 rounded-full shadow-2xl z-30 grid grid-cols-4 gap-1">
         <button
           onClick={() => setActiveTab("home")}
