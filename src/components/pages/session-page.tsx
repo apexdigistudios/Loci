@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   ChevronLeft,
   Clock,
@@ -14,6 +14,9 @@ import {
   Plus,
   Bell,
   User,
+  Calendar as CalendarIcon,
+  Zap,
+  MessageSquare,
 } from "lucide-react";
 import { Globe } from "@/components/ui/globe";
 
@@ -21,6 +24,7 @@ interface Contact {
   id: string;
   name: string;
   phone: string;
+  isLociUser?: boolean;
 }
 
 interface ActiveSession {
@@ -72,20 +76,29 @@ export function SessionPage({
   } | null>(null);
 
   const [isCameraActive, setIsCameraActive] = useState(false);
-  const [showSheet, setShowSheet] = useState(false);
 
-  // Realtime Countdown
+  // Requirement 1: Return Date & Time Selector State
+  const [selectedDayOffset, setSelectedDayOffset] = useState<number>(0); // 0 = Today, 1 = Tomorrow, 2 = Day After...
+  const [returnTimeStr, setReturnTimeStr] = useState<string>(() => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + 30);
+    return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  });
+
+  // Requirement 2: Realtime Alert Timers Countdown & Notification Triggers
   const [targetEndTime, setTargetEndTime] = useState<number | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState<number>(0);
 
-  // Alert Timer Configuration
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [guardianAlertMins, setGuardianAlertMins] = useState<number | "">(5);
   const [selfReminderMins, setSelfReminderMins] = useState<number | "">(5);
   const [activeAlertConfig, setActiveAlertConfig] = useState<{
     guardianMins: number;
     selfMins: number;
-  } | null>(null);
+  } | null>({ guardianMins: 5, selfMins: 5 });
+
+  const [guardianNotificationFired, setGuardianNotificationFired] = useState(false);
+  const [reminderNotificationFired, setReminderNotificationFired] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -93,29 +106,80 @@ export function SessionPage({
 
   const sharedContacts = contacts.filter((c) => selectedContactIds.includes(c.id));
 
-  useEffect(() => {
-    let endTime: number;
-    if (activeSession?.expected_arrival_at) {
-      endTime = new Date(activeSession.expected_arrival_at).getTime();
-    } else {
-      const mins = typeof durationMinutes === "number" && durationMinutes > 0 ? durationMinutes : 30;
-      endTime = Date.now() + mins * 60 * 1000;
+  // Dynamic Day Options for Return Picker
+  const dayOptions = useMemo(() => {
+    const options = [];
+    const today = new Date();
+    for (let i = 0; i < 5; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      let label = "";
+      if (i === 0) label = "Today";
+      else if (i === 1) label = "Tomorrow";
+      else {
+        label = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+      }
+      options.push({ offset: i, label, dateStr: d.toDateString() });
     }
-    setTargetEndTime(endTime);
-  }, [activeSession, durationMinutes, showSheet]);
+    return options;
+  }, []);
 
+  // Update target arrival time whenever user adjusts date/time inputs
+  useEffect(() => {
+    if (activeSession?.expected_arrival_at) {
+      setTargetEndTime(new Date(activeSession.expected_arrival_at).getTime());
+    } else {
+      const targetDate = new Date();
+      targetDate.setDate(targetDate.getDate() + selectedDayOffset);
+      const [hrs, mins] = returnTimeStr.split(":").map(Number);
+      if (!isNaN(hrs) && !isNaN(mins)) {
+        targetDate.setHours(hrs, mins, 0, 0);
+      }
+      const calculatedMins = Math.max(1, Math.round((targetDate.getTime() - Date.now()) / 60000));
+      setDurationMinutes(calculatedMins);
+      setTargetEndTime(targetDate.getTime());
+    }
+  }, [selectedDayOffset, returnTimeStr, activeSession, setDurationMinutes]);
+
+  // Main Countdown Loop + Active Alert Timer Countdown & Notifications
   useEffect(() => {
     if (!targetEndTime) return;
 
     const updateTimer = () => {
-      const diff = Math.max(0, Math.floor((targetEndTime - Date.now()) / 1000));
-      setRemainingSeconds(diff);
+      const diffSecs = Math.floor((targetEndTime - Date.now()) / 1000);
+      setRemainingSeconds(Math.max(0, diffSecs));
+
+      if (activeAlertConfig) {
+        // Self Reminder Notification Trigger
+        const selfReminderSecs = activeAlertConfig.selfMins * 60;
+        if (diffSecs <= selfReminderSecs && diffSecs > 0 && !reminderNotificationFired) {
+          if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            new Notification("⏰ Loci Check-In Reminder", {
+              body: `Are you back safely? You have ${Math.ceil(diffSecs / 60)} minutes remaining to complete your session.`,
+              icon: "/loci-dark.png",
+            });
+          }
+          setReminderNotificationFired(true);
+        }
+
+        // Guardian Overdue Alert Notification Trigger
+        const guardianOverdueSecs = -(activeAlertConfig.guardianMins * 60);
+        if (diffSecs <= guardianOverdueSecs && !guardianNotificationFired) {
+          if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            new Notification("🚨 Guardian Alert Escalated", {
+              body: `Session overdue! Automated alert dispatched to your guardians.`,
+              icon: "/loci-dark.png",
+            });
+          }
+          setGuardianNotificationFired(true);
+        }
+      }
     };
 
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [targetEndTime]);
+  }, [targetEndTime, activeAlertConfig, reminderNotificationFired, guardianNotificationFired]);
 
   const formatTime = (totalSecs: number) => {
     const hrs = Math.floor(totalSecs / 3600);
@@ -126,6 +190,29 @@ export function SessionPage({
       return `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
     }
     return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  };
+
+  // Compact Alert Timers Active Countdown Formatter
+  const getGuardianAlertCountdown = () => {
+    if (!activeAlertConfig || !targetEndTime) return "";
+    const gTarget = targetEndTime + activeAlertConfig.guardianMins * 60 * 1000;
+    const diff = Math.floor((gTarget - Date.now()) / 1000);
+    if (diff <= 0) return "Alert Sent 🚨";
+    return formatTime(diff);
+  };
+
+  const getSelfReminderCountdown = () => {
+    if (!activeAlertConfig || !targetEndTime) return "";
+    const rTarget = targetEndTime - activeAlertConfig.selfMins * 60 * 1000;
+    const diff = Math.floor((rTarget - Date.now()) / 1000);
+    if (diff <= 0) return "Triggered ⏰";
+    return formatTime(diff);
+  };
+
+  const addTimeMinutes = (minsToAdd: number) => {
+    const current = new Date();
+    current.setMinutes(current.getMinutes() + minsToAdd);
+    setReturnTimeStr(`${String(current.getHours()).padStart(2, "0")}:${String(current.getMinutes()).padStart(2, "0")}`);
   };
 
   const startCamera = async () => {
@@ -213,27 +300,18 @@ export function SessionPage({
     if (galleryInputRef.current) galleryInputRef.current.value = "";
   };
 
-  const onSubmitForm = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await handleStartSession(e);
-    setShowSheet(true);
-  };
-
   const handleSaveAlertTimer = () => {
     const gMins = Number(guardianAlertMins) || 5;
     const sMins = Number(selfReminderMins) || 5;
     setActiveAlertConfig({ guardianMins: gMins, selfMins: sMins });
+    setGuardianNotificationFired(false);
+    setReminderNotificationFired(false);
     setShowAlertModal(false);
-  };
-
-  const handleEndSessionAction = async () => {
-    await handleCompleteSession();
-    setShowSheet(false);
   };
 
   return (
     <>
-      {/* CAMERA FULL SCREEN */}
+      {/* CAMERA OVERLAY */}
       {isCameraActive && (
         <div className="fixed inset-0 z-50 bg-black flex flex-col justify-between p-4 max-w-md mx-auto">
           <div className="flex items-center justify-between pt-[max(0.75rem,env(safe-area-inset-top))] z-10 px-2">
@@ -276,24 +354,24 @@ export function SessionPage({
       )}
 
       {/* ACTIVE WATCH PAGEVIEW */}
-      {showSheet || activeSession ? (
+      {activeSession ? (
         <div className="pt-2 space-y-6 min-h-[82vh] flex flex-col justify-between max-w-md mx-auto">
           <div className="space-y-6">
-            {/* Top Back Button */}
+            {/* Top Back Control */}
             <div className="flex items-center justify-start">
               <button
-                onClick={() => setShowSheet(false)}
+                onClick={() => onNavigate("home")}
                 className="p-2.5 rounded-full bg-zinc-200/60 dark:bg-zinc-900/60 backdrop-blur-xl text-black dark:text-white active:scale-90 transition-all shadow-sm flex items-center space-x-1.5 pr-4 border border-zinc-300/40 dark:border-zinc-800/50"
               >
                 <ChevronLeft className="w-4 h-4 stroke-[2.5]" />
-                <span className="text-xs font-bold">Back</span>
+                <span className="text-xs font-bold">Home</span>
               </button>
             </div>
 
-            {/* Location Icon & Shared Contact Avatars */}
+            {/* Location Icon & Shared Guardian Avatars with Loci Status Badges */}
             <div className="flex flex-col items-center justify-center space-y-3 pt-1">
               <div className="p-3 bg-zinc-200/50 dark:bg-zinc-900/60 border border-zinc-300/40 dark:border-zinc-800/60 rounded-2xl shadow-sm">
-                <MapPin className="w-6 h-6 text-black dark:text-white" />
+                <MapPin className="w-6 h-6 text-yellow-400" />
               </div>
 
               <div className="flex items-center justify-center -space-x-2">
@@ -305,25 +383,34 @@ export function SessionPage({
                   sharedContacts.map((c) => (
                     <div
                       key={c.id}
-                      className="w-9 h-9 rounded-full bg-zinc-900 text-white border-2 border-black font-black text-[11px] flex items-center justify-center uppercase shadow-md"
-                      title={c.name}
+                      className="relative group"
+                      title={`${c.name} (${c.isLociUser ? "Loci Guardian Active" : "SMS Alert Ready"})`}
                     >
-                      {c.name.slice(0, 2)}
+                      <div className="w-9 h-9 rounded-full bg-zinc-900 text-yellow-400 border-2 border-black font-black text-[11px] flex items-center justify-center uppercase shadow-md">
+                        {c.name.slice(0, 2)}
+                      </div>
+                      <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-black border border-zinc-800 flex items-center justify-center">
+                        {c.isLociUser ? (
+                          <Zap className="w-2.5 h-2.5 text-yellow-400 fill-yellow-400" />
+                        ) : (
+                          <MessageSquare className="w-2 h-2 text-zinc-400" />
+                        )}
+                      </div>
                     </div>
                   ))
                 )}
               </div>
             </div>
 
-            {/* Tall Extended Bold Text Realtime Timer */}
+            {/* App Yellow Tall Extended Timer Digits */}
             <div className="flex items-center justify-center py-4">
-              <span className="font-mono font-black text-6xl sm:text-7xl tracking-tighter scale-y-[1.3] text-black dark:text-white select-none">
+              <span className="font-mono font-black text-6xl sm:text-7xl tracking-tighter scale-y-[1.3] text-yellow-400 select-none drop-shadow-[0_4px_16px_rgba(250,204,21,0.25)]">
                 {formatTime(remainingSeconds)}
               </span>
             </div>
 
-            {/* Add Alert Timer Button */}
-            <div className="flex flex-col items-center text-center space-y-2 px-4">
+            {/* Requirement 2: Active Alert Countdown Display (Compact Badge) */}
+            <div className="flex flex-col items-center text-center space-y-2.5 px-4">
               <button
                 onClick={() => setShowAlertModal(true)}
                 className="inline-flex items-center space-x-1.5 bg-yellow-400 hover:bg-yellow-500 text-black px-4 py-2 rounded-full font-extrabold text-xs active:scale-95 transition-all shadow-md shadow-yellow-400/20"
@@ -332,21 +419,35 @@ export function SessionPage({
                 <span>Add alert timer</span>
               </button>
 
+              {activeAlertConfig && (
+                <div className="flex flex-col items-center space-y-1.5">
+                  <div className="bg-zinc-100 dark:bg-zinc-900 border border-yellow-400/50 px-3.5 py-1.5 rounded-full flex items-center space-x-3 text-[10px] font-bold text-black dark:text-white shadow-sm">
+                    <div className="flex items-center space-x-1 text-yellow-400">
+                      <Bell className="w-3 h-3" />
+                      <span>Contact alert in:</span>
+                      <span className="font-mono text-white bg-black/60 px-1.5 py-0.5 rounded border border-zinc-800">
+                        {getGuardianAlertCountdown()}
+                      </span>
+                    </div>
+
+                    <span className="text-zinc-600 dark:text-zinc-500">•</span>
+
+                    <div className="flex items-center space-x-1 text-zinc-400">
+                      <span>Reminder:</span>
+                      <span className="font-mono text-zinc-300 bg-black/60 px-1.5 py-0.5 rounded border border-zinc-800">
+                        {getSelfReminderCountdown()}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xs leading-relaxed">
                 Alerts your contacts to check on you if you haven't checked in within the specified time.
               </p>
-
-              {activeAlertConfig && (
-                <div className="mt-2 bg-zinc-100 dark:bg-zinc-900 border border-yellow-400/50 px-3.5 py-1.5 rounded-full flex items-center space-x-2 text-[10px] font-bold text-black dark:text-white animate-in fade-in">
-                  <Bell className="w-3 h-3 text-zinc-400" />
-                  <span>
-                    Contact alert: +{activeAlertConfig.guardianMins}m • Reminder: -{activeAlertConfig.selfMins}m
-                  </span>
-                </div>
-              )}
             </div>
 
-            {/* Globe Only (Badge Hidden) */}
+            {/* Pure Globe Only (No Badges) */}
             <div className="w-full flex items-center justify-center py-2">
               <Globe showBadge={false} />
             </div>
@@ -355,7 +456,7 @@ export function SessionPage({
           {/* End Session Button */}
           <div className="pb-6">
             <button
-              onClick={handleEndSessionAction}
+              onClick={handleCompleteSession}
               disabled={sessionLoading}
               className="w-full bg-red-600 hover:bg-red-700 text-white font-extrabold py-4 rounded-full text-xs transition-all flex items-center justify-center space-x-2 active:scale-95 shadow-lg shadow-red-600/20"
             >
@@ -380,7 +481,7 @@ export function SessionPage({
 
                 <div className="space-y-1">
                   <h3 className="text-sm font-extrabold flex items-center space-x-1.5 text-white">
-                    <Bell className="w-4 h-4 text-zinc-300" />
+                    <Bell className="w-4 h-4 text-yellow-400" />
                     <span>Configure Alert Timers</span>
                   </h3>
                   <p className="text-[11px] text-zinc-400">
@@ -429,7 +530,7 @@ export function SessionPage({
           )}
         </div>
       ) : (
-        /* STANDARD FORM VIEW */
+        /* STANDARD TRIP CONFIGURATION FORM */
         <div className="pt-[max(0.5rem,env(safe-area-inset-top))] space-y-6">
           <input
             ref={galleryInputRef}
@@ -455,7 +556,7 @@ export function SessionPage({
             />
           </div>
 
-          <form onSubmit={onSubmitForm} className="space-y-6">
+          <form onSubmit={handleStartSession} className="space-y-6">
             {/* Question 1: Destination */}
             <div className="space-y-2">
               <label className="block text-sm font-extrabold text-black dark:text-white px-1">
@@ -474,49 +575,60 @@ export function SessionPage({
               </div>
             </div>
 
-            {/* Question 2: Flexible Duration */}
-            <div className="space-y-2.5">
+            {/* Requirement 1: Updated Question Label & Return Day/Time Picker Format */}
+            <div className="space-y-3">
               <label className="block text-sm font-extrabold text-black dark:text-white px-1">
-                How long will your trip take? ⏱
+                When are you expecting to return? ⏱
               </label>
 
-              <div className="grid grid-cols-4 gap-2">
-                {[15, 30, 45, 60].map((mins) => (
+              {/* Day Chips Selector */}
+              <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
+                {dayOptions.map((opt) => (
                   <button
-                    key={mins}
+                    key={opt.offset}
                     type="button"
-                    onClick={() => setDurationMinutes(mins)}
-                    className={`py-2.5 rounded-full text-xs font-extrabold transition-all border ${
-                      durationMinutes === mins
-                        ? "bg-zinc-900 text-white dark:bg-white dark:text-black border-transparent shadow-sm scale-105"
+                    onClick={() => setSelectedDayOffset(opt.offset)}
+                    className={`px-3.5 py-2.5 rounded-full text-xs font-extrabold shrink-0 transition-all border ${
+                      selectedDayOffset === opt.offset
+                        ? "bg-yellow-400 text-black border-yellow-400 shadow-md shadow-yellow-400/20 scale-105"
                         : "bg-zinc-200/60 dark:bg-zinc-900/80 text-zinc-600 dark:text-zinc-400 border-zinc-300/50 dark:border-zinc-800"
                     }`}
                   >
-                    {mins}m
+                    {opt.label}
                   </button>
                 ))}
               </div>
 
-              <div className="relative flex items-center">
-                <Clock className="w-4 h-4 absolute left-4 text-zinc-400" />
-                <input
-                  type="number"
-                  min="1"
-                  max="300"
-                  required
-                  placeholder="Or enter flexible duration (e.g. 25 minutes)"
-                  value={durationMinutes}
-                  onChange={(e) =>
-                    setDurationMinutes(
-                      e.target.value ? Number(e.target.value) : ""
-                    )
-                  }
-                  className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-full pl-11 pr-5 py-3.5 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400 transition-all shadow-inner"
-                />
+              {/* Estimated Expected Return Time Input & Quick Offsets */}
+              <div className="space-y-2">
+                <div className="relative flex items-center">
+                  <Clock className="w-4 h-4 absolute left-4 text-zinc-400" />
+                  <input
+                    type="time"
+                    required
+                    value={returnTimeStr}
+                    onChange={(e) => setReturnTimeStr(e.target.value)}
+                    className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-full pl-11 pr-5 py-3.5 text-xs font-extrabold text-black dark:text-white focus:outline-none focus:border-yellow-400 transition-all shadow-inner"
+                  />
+                </div>
+
+                <div className="flex items-center space-x-2 pt-0.5">
+                  <span className="text-[10px] font-bold text-zinc-400 px-1">Quick add delay:</span>
+                  {[15, 30, 60, 120].map((mins) => (
+                    <button
+                      key={mins}
+                      type="button"
+                      onClick={() => addTimeMinutes(mins)}
+                      className="px-2.5 py-1 rounded-full bg-zinc-200/80 dark:bg-zinc-800/80 border border-zinc-300/40 dark:border-zinc-700/60 text-[10px] font-bold text-zinc-700 dark:text-zinc-300 hover:border-yellow-400 active:scale-90 transition-all"
+                    >
+                      +{mins >= 60 ? `${mins / 60}h` : `${mins}m`}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
-            {/* Question 3: Guardians */}
+            {/* Requirement 3: Share Live Location With Guardians (With Loci Status Indicator) */}
             <div className="space-y-2.5">
               <div className="flex items-center justify-between px-1">
                 <label className="block text-sm font-extrabold text-black dark:text-white">
@@ -563,6 +675,11 @@ export function SessionPage({
                           <Check className="w-2.5 h-2.5 stroke-3" />
                         </div>
                         <span>{c.name}</span>
+                        {c.isLociUser && (
+                          <span className="bg-yellow-400 text-black text-[9px] px-1.5 py-0.2 rounded-full font-black uppercase">
+                            Loci
+                          </span>
+                        )}
                       </button>
                     );
                   })}
@@ -570,7 +687,7 @@ export function SessionPage({
               )}
             </div>
 
-            {/* Question 4: Selfie / Media */}
+            {/* Question 4: Selfie / Media Proof */}
             <div className="space-y-3">
               <label className="block text-sm font-extrabold text-black dark:text-white px-1">
                 Selfie or Media Proof (Optional) 📸
@@ -636,11 +753,7 @@ export function SessionPage({
 
             <button
               type="submit"
-              disabled={
-                sessionLoading ||
-                contacts.length === 0 ||
-                selectedContactIds.length === 0
-              }
+              disabled={sessionLoading}
               className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-4 rounded-full text-xs transition-all flex items-center justify-center space-x-1.5 active:scale-[0.97] disabled:opacity-40 shadow-lg shadow-yellow-400/20 mt-4"
             >
               {sessionLoading ? (

@@ -7,19 +7,13 @@ import { supabase } from "@/lib/supabase";
 
 import { HomePage } from "@/components/pages/home-page";
 import { SessionPage } from "@/components/pages/session-page";
-import { ContactsPage } from "@/components/pages/contacts-page";
+import { ContactsPage, Contact } from "@/components/pages/contacts-page";
 import { SharePage } from "@/components/pages/share-page";
 import { ProfilePage } from "@/components/pages/profile-page";
 
 interface MainAppProps {
   userPhone: string;
   onLogout: () => void;
-}
-
-interface Contact {
-  id: string;
-  name: string;
-  phone: string;
 }
 
 interface ActiveSession {
@@ -81,11 +75,8 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
   useEffect(() => {
     setMounted(true);
-
-    if (typeof window !== "undefined") {
-      if ("Notification" in window) {
-        setNotificationPermission(Notification.permission);
-      }
+    if (typeof window !== "undefined" && "Notification" in window) {
+      setNotificationPermission(Notification.permission);
     }
   }, []);
 
@@ -123,46 +114,77 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     return () => clearInterval(timer);
   }, []);
 
+  // Requirement 1: Load active session from Supabase & localStorage cache on mount
   const loadUserData = useCallback(async () => {
     setDataLoading(true);
     try {
-      const { data: userData, error: userError } = await supabase
+      const { data: userData } = await supabase
         .from("users")
         .select("full_name, nickname")
         .eq("phone", userPhone)
         .maybeSingle();
 
-      if (userError) console.error("User query error:", userError);
       if (userData) {
         setFullName(userData.full_name || "");
         setNickname(userData.nickname || "");
       }
 
-      const { data: contactsData, error: contactsError } = await supabase
+      const { data: contactsData } = await supabase
         .from("trusted_contacts")
-        .select("id, name, phone")
+        .select("id, name, phone, group_category")
         .eq("user_phone", userPhone)
         .order("created_at", { ascending: false });
 
-      if (contactsError) console.error("Contacts query error:", contactsError);
-      if (contactsData) {
-        setContacts(contactsData);
-        setSelectedContactIds(contactsData.map((c) => c.id));
+      if (contactsData && contactsData.length > 0) {
+        const phoneNumbers = contactsData.map((c) => c.phone);
+        const { data: matchedUsers } = await supabase
+          .from("users")
+          .select("phone")
+          .in("phone", phoneNumbers);
+
+        const lociPhonesSet = new Set((matchedUsers || []).map((u) => u.phone));
+
+        const formattedContacts: Contact[] = contactsData.map((c) => ({
+          ...c,
+          isLociUser: lociPhonesSet.has(c.phone),
+        }));
+
+        setContacts(formattedContacts);
+        setSelectedContactIds(formattedContacts.map((c) => c.id));
+      } else {
+        setContacts([]);
       }
 
-      const { data: sessionData, error: sessionError } = await supabase
+      // Query database for persistent active session
+      const { data: sessionData } = await supabase
         .from("checkin_sessions")
         .select("id, destination, expected_arrival_at, status")
         .eq("user_phone", userPhone)
         .eq("status", "active")
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
-      if (sessionError) console.error("Session query error:", sessionError);
       if (sessionData) {
         setActiveSession(sessionData);
+        if (typeof window !== "undefined") {
+          localStorage.setItem("loci_active_session", JSON.stringify(sessionData));
+        }
+      } else if (typeof window !== "undefined") {
+        const cached = localStorage.getItem("loci_active_session");
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached);
+            if (parsed.status === "active") {
+              setActiveSession(parsed);
+            }
+          } catch (e) {
+            localStorage.removeItem("loci_active_session");
+          }
+        }
       }
     } catch (err) {
-      console.error("Failed to fetch initial data:", err);
+      console.error("Failed to load user data:", err);
     } finally {
       setDataLoading(false);
     }
@@ -172,6 +194,32 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     loadUserData();
   }, [loadUserData]);
 
+  // System Notification Sync
+  useEffect(() => {
+    if (!activeSession) return;
+
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      new Notification("🛡️ Loci Active Watch Session", {
+        body: `Journey to ${activeSession.destination} in progress. Guardians are watching.`,
+        icon: "/loci-dark.png",
+        tag: "active-loci-session",
+      });
+    }
+
+    const titleInterval = setInterval(() => {
+      if (typeof document !== "undefined") {
+        document.title = "🛡️ Active Walk Session — Loci";
+      }
+    }, 2000);
+
+    return () => {
+      clearInterval(titleInterval);
+      if (typeof document !== "undefined") {
+        document.title = "Loci — Personal Safety";
+      }
+    };
+  }, [activeSession]);
+
   const toggleContactSelection = (id: string) => {
     setSelectedContactIds((prev) =>
       prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
@@ -180,50 +228,79 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
   const handleStartSession = async (e: React.FormEvent) => {
     e.preventDefault();
-    const finalMins = Number(durationMinutes);
-    if (!destination.trim() || !finalMins || finalMins <= 0) return;
+    const finalMins = Number(durationMinutes) || 30;
+    const destName = destination.trim() || "Destination Check-In";
 
-    setSessionLoading(true);
     const arrivalTime = new Date(Date.now() + finalMins * 60000).toISOString();
+    const tempSession: ActiveSession = {
+      id: `local-${Date.now()}`,
+      destination: destName,
+      expected_arrival_at: arrivalTime,
+      status: "active",
+    };
 
-    const { data, error } = await supabase
-      .from("checkin_sessions")
-      .insert({
-        user_phone: userPhone,
-        destination: destination.trim(),
-        expected_arrival_at: arrivalTime,
-        status: "active",
-        notes: notes.trim() || null,
-      })
-      .select()
-      .single();
+    setActiveSession(tempSession);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("loci_active_session", JSON.stringify(tempSession));
+    }
+    setActiveTab("session");
+    setSessionLoading(true);
 
-    setSessionLoading(false);
+    try {
+      const { data, error } = await supabase
+        .from("checkin_sessions")
+        .insert({
+          user_phone: userPhone,
+          destination: destName,
+          expected_arrival_at: arrivalTime,
+          status: "active",
+          notes: notes.trim() || null,
+        })
+        .select()
+        .single();
 
-    if (!error && data) {
-      setActiveSession(data);
+      if (!error && data) {
+        setActiveSession(data);
+        if (typeof window !== "undefined") {
+          localStorage.setItem("loci_active_session", JSON.stringify(data));
+        }
+      }
+    } catch (err) {
+      console.error("Supabase Session creation error:", err);
+    } finally {
+      setSessionLoading(false);
       setDestination("");
       setNotes("");
     }
   };
 
+  // Requirement 2: Send device notification when user completes session
   const handleCompleteSession = async () => {
-    if (!activeSession) return;
+    const currentId = activeSession?.id;
+    setActiveSession(null);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("loci_active_session");
+    }
 
-    setSessionLoading(true);
-    const { error } = await supabase
-      .from("checkin_sessions")
-      .update({ status: "completed" })
-      .eq("id", activeSession.id);
+    // Trigger device notification on session end
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      new Notification("🛡️ Loci Session Completed", {
+        body: "Your active watch session was completed safely. Guardians notified.",
+        icon: "/loci-dark.png",
+      });
+    }
 
-    setSessionLoading(false);
-
-    if (!error) {
-      setActiveSession(null);
+    if (currentId && !currentId.startsWith("local-")) {
+      setSessionLoading(true);
+      await supabase
+        .from("checkin_sessions")
+        .update({ status: "completed" })
+        .eq("id", currentId);
+      setSessionLoading(false);
     }
   };
 
-  const handleAddManualContact = async (e: React.FormEvent) => {
+  const handleAddManualContact = async (e: React.FormEvent, selectedGroup = "Emergency Circle") => {
     e.preventDefault();
     if (!manualName.trim() || !manualPhone.trim()) return;
 
@@ -234,6 +311,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         user_phone: userPhone,
         name: manualName.trim(),
         phone: manualPhone.trim(),
+        group_category: selectedGroup,
       })
       .select()
       .single();
@@ -241,8 +319,19 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     setAddingContact(false);
 
     if (!error && data) {
-      setContacts((prev) => [data, ...prev]);
-      setSelectedContactIds((prev) => [...prev, data.id]);
+      const { data: matchedUser } = await supabase
+        .from("users")
+        .select("phone")
+        .eq("phone", data.phone)
+        .maybeSingle();
+
+      const newContact: Contact = {
+        ...data,
+        isLociUser: !!matchedUser,
+      };
+
+      setContacts((prev) => [newContact, ...prev]);
+      setSelectedContactIds((prev) => [...prev, newContact.id]);
       setManualName("");
       setManualPhone("");
     }
@@ -262,7 +351,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
   return (
     <div className="min-h-screen bg-zinc-100/60 dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between max-w-md mx-auto w-full font-sans antialiased relative border-x border-zinc-200/50 dark:border-zinc-900 selection:bg-yellow-400 selection:text-black">
-      {/* Top Header */}
+      {/* Universal Top Header */}
       {activeTab !== "session" && (
         <header className="sticky top-0 z-30 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5 bg-white/70 dark:bg-black/70 backdrop-blur-3xl border-b border-zinc-200/40 dark:border-zinc-800/40 grid grid-cols-3 items-center">
           <div className="text-left truncate leading-none">
@@ -294,7 +383,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         </header>
       )}
 
-      {/* Main Content View Switcher */}
+      {/* Main Tab Views */}
       <main className="flex-1 px-4 py-5 space-y-5 pb-28">
         {dataLoading ? (
           <div className="space-y-5 animate-pulse">
@@ -384,7 +473,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         )}
       </main>
 
-      {/* Floating Bottom Navigation Bar */}
+      {/* Persistent Bottom Navbar */}
       <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-104 p-1 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-3xl border border-zinc-200/40 dark:border-zinc-800/50 rounded-full shadow-2xl z-30 grid grid-cols-4 gap-1">
         <button
           onClick={() => setActiveTab("home")}
@@ -400,7 +489,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
         <button
           onClick={() => setActiveTab("session")}
-          className={`flex items-center justify-center space-x-1 py-2.5 rounded-full transition-all active:scale-95 ${
+          className={`flex items-center justify-center space-x-1 py-2.5 rounded-full transition-all active:scale-95 relative ${
             activeTab === "session"
               ? "bg-yellow-400 text-black font-extrabold shadow-sm"
               : "text-zinc-400 hover:text-black dark:hover:text-white"
@@ -408,6 +497,9 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         >
           <Shield className="w-3.5 h-3.5" />
           <span className="text-[10px]">Session</span>
+          {activeSession && (
+            <span className="w-2 h-2 rounded-full bg-emerald-500 absolute top-2 right-4 animate-ping" />
+          )}
         </button>
 
         <button

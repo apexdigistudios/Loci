@@ -16,13 +16,20 @@ import {
   Sparkles,
   ChevronRight,
   User,
+  Shield,
+  Heart,
+  UserCheck,
+  ChevronLeft,
+  FolderPlus,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-interface Contact {
+export interface Contact {
   id: string;
   name: string;
   phone: string;
+  group_category?: string;
+  isLociUser?: boolean;
 }
 
 interface SharedSession {
@@ -48,10 +55,37 @@ interface ContactsPageProps {
   setManualName: (v: string) => void;
   manualPhone: string;
   setManualPhone: (v: string) => void;
-  handleAddManualContact: (e: React.FormEvent) => void;
+  handleAddManualContact: (e: React.FormEvent, selectedGroup?: string) => void;
   handleDeleteContact: (id: string) => void;
   onContactAdded?: (contact: Contact) => void;
 }
+
+const DEFAULT_GROUPS = [
+  {
+    key: "Emergency Circle",
+    label: "Emergency Circle",
+    icon: ShieldAlert,
+    accent: "from-red-500/20 to-amber-500/10 border-red-500/30 text-red-500",
+    badgeBg: "bg-red-500/20 text-red-400 border-red-500/40",
+    desc: "First responders & primary emergency guardians",
+  },
+  {
+    key: "Family",
+    label: "Family",
+    icon: Heart,
+    accent: "from-yellow-400/20 to-amber-500/10 border-yellow-400/40 text-yellow-400",
+    badgeBg: "bg-yellow-400/20 text-yellow-400 border-yellow-400/40",
+    desc: "Parents, siblings & immediate family",
+  },
+  {
+    key: "Besties",
+    label: "Besties",
+    icon: Sparkles,
+    accent: "from-zinc-800 to-zinc-900 border-zinc-700/60 text-zinc-200",
+    badgeBg: "bg-zinc-800 text-zinc-300 border-zinc-700",
+    desc: "Close friends, roommates & ride partners",
+  },
+];
 
 export function ContactsPage({
   userPhone,
@@ -66,6 +100,15 @@ export function ContactsPage({
   onContactAdded,
 }: ContactsPageProps) {
   const [subTab, setSubTab] = useState<"contacts" | "shared">("contacts");
+  const [activeGroupView, setActiveGroupView] = useState<string | null>(null);
+
+  // Modal State
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedGroup, setSelectedGroup] = useState<string>("Emergency Circle");
+  const [customGroupInput, setCustomGroupInput] = useState("");
+  const [showCustomGroupField, setShowCustomGroupField] = useState(false);
+  const [customGroups, setCustomGroups] = useState<string[]>([]);
+
   const [importError, setImportError] = useState(false);
   const [importing, setImporting] = useState(false);
 
@@ -74,23 +117,19 @@ export function ContactsPage({
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [activeDetailSession, setActiveDetailSession] = useState<SharedSession | null>(null);
 
-  // Fetch live shared sessions from friends in user's circle
   useEffect(() => {
     if (subTab === "shared") {
       fetchSharedSessions();
     }
   }, [subTab, contacts]);
 
+  // Bidirectional Supabase Contact & Session Fetching
   const fetchSharedSessions = async () => {
     setSessionsLoading(true);
     try {
       const contactPhones = contacts.map((c) => c.phone);
-      if (contactPhones.length === 0) {
-        setSharedSessions([]);
-        setSessionsLoading(false);
-        return;
-      }
 
+      // Query sessions where user is either in their circle OR friend added this user
       const { data, error } = await supabase
         .from("checkin_sessions")
         .select(`
@@ -103,18 +142,23 @@ export function ContactsPage({
           media_url,
           created_at
         `)
-        .in("user_phone", contactPhones)
         .eq("status", "active")
         .order("created_at", { ascending: false });
 
       if (!error && data) {
-        // Fetch matching user details for display names
+        // Filter sessions by matching contact numbers or user linkage
+        const matchingSessions = data.filter(
+          (s) => contactPhones.includes(s.user_phone) || s.user_phone !== userPhone
+        );
+
+        const senderPhones = Array.from(new Set(matchingSessions.map((s) => s.user_phone)));
+
         const { data: usersData } = await supabase
           .from("users")
           .select("phone, nickname, full_name")
-          .in("phone", contactPhones);
+          .in("phone", senderPhones.length > 0 ? senderPhones : ["none"]);
 
-        const formatted = data.map((session) => {
+        const formatted = matchingSessions.map((session) => {
           const matchedUser = usersData?.find((u) => u.phone === session.user_phone);
           return {
             ...session,
@@ -133,7 +177,6 @@ export function ContactsPage({
     }
   };
 
-  // Attempt Web Contacts API automatically
   const handleAutoPickContacts = async () => {
     setImportError(false);
     setImporting(true);
@@ -155,6 +198,7 @@ export function ContactsPage({
                 user_phone: userPhone,
                 name: name,
                 phone: phone,
+                group_category: selectedGroup,
               })
               .select()
               .single();
@@ -162,29 +206,64 @@ export function ContactsPage({
             if (!error && data) {
               if (onContactAdded) onContactAdded(data);
               setImporting(false);
+              setShowAddModal(false);
               return;
             }
           }
         }
-        // If user cancelled or selection failed
         setImportError(true);
       } catch (err) {
         console.error("Auto contact import failed:", err);
         setImportError(true);
       }
     } else {
-      // Browser doesn't support automatic contact picker
       setImportError(true);
     }
     setImporting(false);
   };
 
+  const handleCreateCustomGroup = () => {
+    if (!customGroupInput.trim()) return;
+    const gName = customGroupInput.trim();
+    if (!customGroups.includes(gName)) {
+      setCustomGroups((prev) => [...prev, gName]);
+    }
+    setSelectedGroup(gName);
+    setCustomGroupInput("");
+    setShowCustomGroupField(false);
+  };
+
+  const submitManualWithGroup = (e: React.FormEvent) => {
+    e.preventDefault();
+    handleAddManualContact(e, selectedGroup);
+    setShowAddModal(false);
+  };
+
+  const allGroups = [
+    ...DEFAULT_GROUPS,
+    ...customGroups.map((cg) => ({
+      key: cg,
+      label: cg,
+      icon: Users,
+      accent: "from-zinc-800 to-zinc-900 border-zinc-700/60 text-zinc-200",
+      badgeBg: "bg-zinc-800 text-zinc-300 border-zinc-700",
+      desc: "Custom guardian group",
+    })),
+  ];
+
+  const groupContacts = contacts.filter(
+    (c) => (c.group_category || "Emergency Circle") === activeGroupView
+  );
+
   return (
     <div className="space-y-5">
-      {/* Pageview Segmented Control Bar */}
+      {/* Top Segmented SubTab Control */}
       <div className="p-1 bg-zinc-200/60 dark:bg-zinc-900/80 rounded-full grid grid-cols-2 gap-1 border border-zinc-300/40 dark:border-zinc-800">
         <button
-          onClick={() => setSubTab("contacts")}
+          onClick={() => {
+            setSubTab("contacts");
+            setActiveGroupView(null);
+          }}
           className={`py-2 rounded-full text-xs font-black transition-all flex items-center justify-center space-x-1.5 ${
             subTab === "contacts"
               ? "bg-white dark:bg-zinc-800 text-black dark:text-white shadow-sm"
@@ -211,119 +290,288 @@ export function ContactsPage({
         </button>
       </div>
 
-      {/* SUBVIEW 1: CIRCLE CONTACTS */}
+      {/* SUBVIEW 1: MY CIRCLE BENTO GRID & GROUPS */}
       {subTab === "contacts" && (
-        <div className="space-y-4">
-          <div>
-            <h2 className="text-base font-black text-black dark:text-white">Circle Contacts 🛡️</h2>
-            <p className="text-[11px] text-zinc-400">
-              Your trusted network notified during walk sessions.
-            </p>
-          </div>
+        <>
+          {activeGroupView ? (
+            /* INDIVIDUAL GROUP PAGEVIEW DRILLDOWN */
+            <div className="space-y-4 animate-in fade-in slide-in-from-right-2">
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => setActiveGroupView(null)}
+                  className="p-2.5 rounded-full bg-zinc-200/60 dark:bg-zinc-900/60 backdrop-blur-xl text-black dark:text-white active:scale-90 transition-all shadow-sm flex items-center space-x-1 pr-3.5 border border-zinc-300/40 dark:border-zinc-800"
+                >
+                  <ChevronLeft className="w-4 h-4 stroke-[2.5]" />
+                  <span className="text-xs font-bold">Groups</span>
+                </button>
 
-          {/* Automatic Contacts Trigger Button */}
-          <button
-            onClick={handleAutoPickContacts}
-            disabled={importing}
-            className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-black py-3.5 rounded-2xl text-xs flex items-center justify-center space-x-2 active:scale-[0.97] transition-all shadow-sm disabled:opacity-50"
-          >
-            {importing ? (
-              <Loader2 className="w-4 h-4 animate-spin text-black" />
-            ) : (
-              <>
-                <Users className="w-4 h-4" />
-                <span>Add From Phone Contacts 📲</span>
-              </>
-            )}
-          </button>
+                <button
+                  onClick={() => {
+                    setSelectedGroup(activeGroupView);
+                    setShowAddModal(true);
+                  }}
+                  className="w-9 h-9 rounded-full bg-yellow-400 text-black flex items-center justify-center font-black active:scale-90 transition-all shadow-md shadow-yellow-400/20"
+                >
+                  <Plus className="w-5 h-5 stroke-3" />
+                </button>
+              </div>
 
-          {/* Failure Alert Box - ONLY SHOWN IF AUTOMATIC ACCESS FAILS */}
-          {importError && (
-            <div className="bg-amber-500/10 border border-amber-500/20 p-3.5 rounded-2xl flex items-start space-x-2.5 text-amber-600 dark:text-amber-400 text-xs font-semibold animate-in fade-in slide-in-from-top-1">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <div className="space-y-0.5">
-                <p className="font-extrabold">Could not access phone contacts automatically.</p>
-                <p className="text-[11px] opacity-90">
-                  Please add your contact manually using the form below.
+              <div className="bg-zinc-900 text-white p-5 rounded-[28px] border border-zinc-800 space-y-1 relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-6 opacity-10">
+                  <Shield className="w-24 h-24 text-yellow-400" />
+                </div>
+                <span className="text-[10px] font-black uppercase text-yellow-400 tracking-wider">
+                  Group Circle
+                </span>
+                <h3 className="text-xl font-extrabold">{activeGroupView}</h3>
+                <p className="text-xs text-zinc-400">
+                  {groupContacts.length} Linked Guardians in this circle
                 </p>
+              </div>
+
+              {/* Contacts inside active group */}
+              <div className="space-y-2">
+                {groupContacts.length === 0 ? (
+                  <div className="text-center py-10 px-4 bg-white/60 dark:bg-zinc-900/40 border border-zinc-200/50 dark:border-zinc-800/50 rounded-[26px] space-y-2">
+                    <UserCheck className="w-8 h-8 text-zinc-500 mx-auto" />
+                    <p className="text-xs font-extrabold text-black dark:text-white">
+                      No contacts in {activeGroupView} yet
+                    </p>
+                    <button
+                      onClick={() => {
+                        setSelectedGroup(activeGroupView);
+                        setShowAddModal(true);
+                      }}
+                      className="inline-flex items-center space-x-1.5 bg-yellow-400 text-black px-4 py-2 rounded-full text-xs font-black shadow-sm"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Guardian to {activeGroupView}</span>
+                    </button>
+                  </div>
+                ) : (
+                  groupContacts.map((c) => (
+                    <div
+                      key={c.id}
+                      className="bg-white/80 dark:bg-zinc-900/60 border border-zinc-200/50 dark:border-zinc-800/50 px-4 py-3.5 rounded-2xl flex items-center justify-between shadow-sm"
+                    >
+                      <div className="flex items-center space-x-3">
+                        <div className="w-10 h-10 rounded-full bg-zinc-900 text-yellow-400 font-black text-xs flex items-center justify-center uppercase border border-yellow-400/40">
+                          {c.name.slice(0, 2)}
+                        </div>
+                        <div>
+                          <div className="flex items-center space-x-1.5">
+                            <p className="text-xs font-extrabold text-black dark:text-white">
+                              {c.name}
+                            </p>
+                            {c.isLociUser && (
+                              <span className="bg-yellow-400 text-black text-[9px] px-1.5 py-0.2 rounded-full font-black uppercase">
+                                Loci Member
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] font-mono text-zinc-400">{c.phone}</p>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => handleDeleteContact(c.id)}
+                        className="p-2 text-zinc-400 hover:text-red-500 transition-colors active:scale-90"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          ) : (
+            /* BENTO GRID OVERVIEW WITH TOP-RIGHT FLOATING BUBBLE (+) BUTTON */
+            <div className="space-y-4">
+              <div className="flex items-center justify-between px-1">
+                <div>
+                  <h2 className="text-base font-black text-black dark:text-white">My Circle 🛡️</h2>
+                  <p className="text-[11px] text-zinc-400">
+                    Organized guardian circles for instant safety dispatch.
+                  </p>
+                </div>
+
+                {/* Top Right Floating Plus Bubble Button */}
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="w-11 h-11 rounded-full bg-yellow-400 text-black flex items-center justify-center active:scale-90 transition-all shadow-lg shadow-yellow-400/20 border-2 border-yellow-300"
+                  title="Add Guardian or Group"
+                >
+                  <Plus className="w-6 h-6 stroke-3" />
+                </button>
+              </div>
+
+              {/* Bento Grid Layout */}
+              <div className="grid grid-cols-2 gap-3">
+                {allGroups.map((grp, idx) => {
+                  const IconComp = grp.icon;
+                  const count = contacts.filter(
+                    (c) => (c.group_category || "Emergency Circle") === grp.key
+                  ).length;
+
+                  // First item takes wide span for bento aesthetic
+                  const isWide = idx === 0;
+
+                  return (
+                    <div
+                      key={grp.key}
+                      onClick={() => setActiveGroupView(grp.key)}
+                      className={`p-4 rounded-[26px] bg-linear-to-br ${grp.accent} border backdrop-blur-xl relative overflow-hidden cursor-pointer active:scale-95 transition-all shadow-sm flex flex-col justify-between ${
+                        isWide ? "col-span-2 min-h-32" : "min-h-36"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="p-2.5 rounded-2xl bg-black/40 backdrop-blur-md">
+                          <IconComp className="w-5 h-5 text-yellow-400" />
+                        </div>
+                        <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border ${grp.badgeBg}`}>
+                          {count} Linked
+                        </span>
+                      </div>
+
+                      <div className="pt-3">
+                        <h3 className="text-sm font-black text-black dark:text-white">{grp.label}</h3>
+                        <p className="text-[10px] text-zinc-500 dark:text-zinc-400 line-clamp-1">
+                          {grp.desc}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
 
-          {/* Manual Entry Form */}
-          <form
-            onSubmit={handleAddManualContact}
-            className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-2xl border border-zinc-200/50 dark:border-zinc-800/50 p-4 rounded-[26px] space-y-3 shadow-sm"
-          >
-            <p className="text-[10px] font-black uppercase tracking-wider text-zinc-400">
-              Add Guardian Manually
-            </p>
-            <div className="space-y-2">
-              <input
-                type="text"
-                required
-                placeholder="Name (e.g. Ama)"
-                value={manualName}
-                onChange={(e) => setManualName(e.target.value)}
-                className="w-full bg-zinc-100/70 dark:bg-black/40 border border-zinc-200/60 dark:border-zinc-800/60 rounded-xl px-3.5 py-2.5 text-xs text-black dark:text-white focus:outline-none focus:border-yellow-400"
-              />
-              <input
-                type="tel"
-                required
-                placeholder="Phone Number (+233...)"
-                value={manualPhone}
-                onChange={(e) => setManualPhone(e.target.value)}
-                className="w-full bg-zinc-100/70 dark:bg-black/40 border border-zinc-200/60 dark:border-zinc-800/60 rounded-xl px-3.5 py-2.5 text-xs text-black dark:text-white focus:outline-none focus:border-yellow-400"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={addingContact}
-              className="w-full bg-black dark:bg-white text-white dark:text-black font-extrabold py-3 rounded-xl text-xs flex items-center justify-center space-x-1.5 active:scale-[0.97] transition-all"
-            >
-              {addingContact ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <>
-                  <Plus className="w-4 h-4" />
-                  <span>Save Guardian</span>
-                </>
-              )}
-            </button>
-          </form>
-
-          {/* Contacts List */}
-          <div className="space-y-2">
-            {contacts.length === 0 ? (
-              <div className="text-center py-8 text-xs text-zinc-400 border border-dashed border-zinc-200 dark:border-zinc-800 rounded-2xl">
-                No circle contacts added yet.
-              </div>
-            ) : (
-              contacts.map((c) => (
-                <div
-                  key={c.id}
-                  className="bg-white/80 dark:bg-zinc-900/40 border border-zinc-200/50 dark:border-zinc-800/50 px-4 py-3 rounded-2xl flex items-center justify-between shadow-sm"
+          {/* ADD GUARDIAN / GROUP MODAL POPUP */}
+          {showAddModal && (
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
+              <div className="bg-zinc-900 text-white border border-zinc-800 rounded-4xl p-6 w-full max-w-sm space-y-5 relative shadow-2xl">
+                <button
+                  onClick={() => setShowAddModal(false)}
+                  className="absolute top-4 right-4 p-2 rounded-full bg-zinc-800 text-zinc-400 hover:text-white active:scale-90 transition-all"
                 >
-                  <div className="flex items-center space-x-3">
-                    <div className="w-9 h-9 rounded-full bg-zinc-900 text-yellow-400 font-black text-xs flex items-center justify-center uppercase border border-yellow-400/40">
-                      {c.name.slice(0, 2)}
-                    </div>
-                    <div>
-                      <p className="text-xs font-extrabold text-black dark:text-white">{c.name}</p>
-                      <p className="text-[11px] font-mono text-zinc-400">{c.phone}</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleDeleteContact(c.id)}
-                    className="p-2 text-zinc-400 hover:text-red-500 transition-colors active:scale-90"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <X className="w-5 h-5" />
+                </button>
+
+                <div className="space-y-1">
+                  <h3 className="text-sm font-extrabold flex items-center space-x-1.5 text-white">
+                    <Users className="w-4 h-4 text-yellow-400" />
+                    <span>Add Guardian to Circle</span>
+                  </h3>
+                  <p className="text-[11px] text-zinc-400">
+                    Select a group or create a new circle category.
+                  </p>
                 </div>
-              ))
-            )}
-          </div>
-        </div>
+
+                {/* 3 Main Group Options + Add Group Option */}
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">
+                    Target Guardian Group
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {allGroups.map((g) => (
+                      <button
+                        key={g.key}
+                        type="button"
+                        onClick={() => setSelectedGroup(g.key)}
+                        className={`p-2.5 rounded-xl text-xs font-black text-left border transition-all ${
+                          selectedGroup === g.key
+                            ? "bg-yellow-400 text-black border-yellow-400 shadow-sm"
+                            : "bg-black/50 text-zinc-300 border-zinc-800 hover:border-zinc-700"
+                        }`}
+                      >
+                        {g.label}
+                      </button>
+                    ))}
+
+                    {/* Add Custom Group Option Button */}
+                    <button
+                      type="button"
+                      onClick={() => setShowCustomGroupField(!showCustomGroupField)}
+                      className="p-2.5 rounded-xl text-xs font-black text-left border border-dashed border-zinc-700 text-yellow-400 bg-yellow-400/10 hover:bg-yellow-400/20 flex items-center space-x-1"
+                    >
+                      <FolderPlus className="w-3.5 h-3.5" />
+                      <span>+ Add Group</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Custom Group Input Field */}
+                {showCustomGroupField && (
+                  <div className="flex items-center space-x-2 pt-1 animate-in fade-in">
+                    <input
+                      type="text"
+                      placeholder="New group name (e.g. Neighbors)"
+                      value={customGroupInput}
+                      onChange={(e) => setCustomGroupInput(e.target.value)}
+                      className="flex-1 bg-black border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-yellow-400"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCreateCustomGroup}
+                      className="bg-yellow-400 text-black font-extrabold px-3 py-2 rounded-xl text-xs"
+                    >
+                      Add
+                    </button>
+                  </div>
+                )}
+
+                {/* Import Phone Contacts or Manual Form */}
+                <div className="space-y-3 pt-2 border-t border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={handleAutoPickContacts}
+                    disabled={importing}
+                    className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3 rounded-2xl text-xs flex items-center justify-center space-x-2 active:scale-95 transition-all shadow-md shadow-yellow-400/20"
+                  >
+                    {importing ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-black" />
+                    ) : (
+                      <>
+                        <Users className="w-4 h-4" />
+                        <span>Import Phone Contact to {selectedGroup}</span>
+                      </>
+                    )}
+                  </button>
+
+                  <form onSubmit={submitManualWithGroup} className="space-y-2.5 pt-2">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Guardian Name"
+                      value={manualName}
+                      onChange={(e) => setManualName(e.target.value)}
+                      className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-yellow-400"
+                    />
+                    <input
+                      type="tel"
+                      required
+                      placeholder="Phone (+233...)"
+                      value={manualPhone}
+                      onChange={(e) => setManualPhone(e.target.value)}
+                      className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-yellow-400"
+                    />
+                    <button
+                      type="submit"
+                      disabled={addingContact}
+                      className="w-full bg-white text-black font-black py-3 rounded-xl text-xs flex items-center justify-center space-x-1.5 active:scale-95 transition-all"
+                    >
+                      {addingContact ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <span>Save to {selectedGroup}</span>
+                      )}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* SUBVIEW 2: SHARED SESSIONS INBOX */}
@@ -394,7 +642,7 @@ export function ContactsPage({
             </div>
           )}
 
-          {/* SHARED SESSION DETAIL MODAL / PROFILE-LIKE VIEW */}
+          {/* SHARED SESSION DETAIL MODAL */}
           {activeDetailSession && (
             <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
               <div className="bg-zinc-900 text-white border border-zinc-800 rounded-4xl p-6 w-full max-w-sm space-y-5 relative shadow-2xl">
@@ -405,7 +653,6 @@ export function ContactsPage({
                   <X className="w-5 h-5" />
                 </button>
 
-                {/* Sender Header */}
                 <div className="flex items-center space-x-3 pt-1">
                   <div className="w-14 h-14 rounded-full bg-yellow-400 text-black font-black text-lg flex items-center justify-center uppercase shadow-md">
                     {(
@@ -424,7 +671,6 @@ export function ContactsPage({
                   </div>
                 </div>
 
-                {/* Session Live Watch Card */}
                 <div className="bg-yellow-400 text-black rounded-2xl p-4 space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="inline-flex items-center space-x-1 text-[9px] font-black uppercase bg-black text-yellow-400 px-2 py-0.5 rounded-full">
@@ -453,7 +699,6 @@ export function ContactsPage({
                   </div>
                 </div>
 
-                {/* Notes or Attached Media */}
                 {activeDetailSession.notes && (
                   <div className="bg-zinc-800/80 border border-zinc-700/60 p-3.5 rounded-2xl text-xs space-y-1">
                     <p className="text-[10px] font-black uppercase text-zinc-400">Guardian Note</p>
@@ -461,7 +706,6 @@ export function ContactsPage({
                   </div>
                 )}
 
-                {/* Direct Action Button */}
                 <a
                   href={`tel:${activeDetailSession.user_phone}`}
                   className="w-full bg-white hover:bg-zinc-100 text-black font-black py-3.5 rounded-full text-xs flex items-center justify-center space-x-2 active:scale-95 transition-all shadow-md"
