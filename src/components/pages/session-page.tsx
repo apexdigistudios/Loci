@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useMemo } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import {
   ChevronLeft,
   Clock,
@@ -18,13 +18,15 @@ import {
   Zap,
   MessageSquare,
 } from "lucide-react";
-import { Globe } from "@/components/ui/globe";
+import { supabase } from "@/lib/supabase";
 
 interface Contact {
   id: string;
   name: string;
   phone: string;
   isLociUser?: boolean;
+  avatar_url?: string;
+  group_category?: string;
 }
 
 interface ActiveSession {
@@ -95,16 +97,102 @@ export function SessionPage({
   const [activeAlertConfig, setActiveAlertConfig] = useState<{
     guardianMins: number;
     selfMins: number;
-  } | null>({ guardianMins: 5, selfMins: 5 });
+  } | null>(null);
 
   const [guardianNotificationFired, setGuardianNotificationFired] = useState(false);
   const [reminderNotificationFired, setReminderNotificationFired] = useState(false);
+  const guardianNotificationFiredRef = useRef(false);
+  const [contactSelectionMode, setContactSelectionMode] = useState<"individual" | "groups">("individual");
+  const [locationCoords, setLocationCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locationStatus, setLocationStatus] = useState<"idle" | "requesting" | "granted" | "denied">("idle");
+  const [locationUpdatedAt, setLocationUpdatedAt] = useState<Date | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
 
-  const sharedContacts = contacts.filter((c) => selectedContactIds.includes(c.id));
+  const sharedContacts = useMemo(
+    () => contacts.filter((c) => selectedContactIds.includes(c.id)),
+    [contacts, selectedContactIds]
+  );
+  const contactGroups = useMemo(
+    () => Array.from(new Set(contacts.map((contact) => contact.group_category).filter((group): group is string => !!group))),
+    [contacts]
+  );
+
+  const dispatchGuardianBroadcast = useCallback(async (event: string, details: Record<string, unknown>) => {
+    if (!activeSession || activeSession.id.startsWith("local-")) return;
+
+    await Promise.all(sharedContacts.map((contact) => new Promise<void>((resolve) => {
+      const channel = supabase.channel(`guardian-alert-${encodeURIComponent(contact.phone)}`);
+      let sent = false;
+      let finished = false;
+      const timeout = setTimeout(finish, 5000);
+
+      function finish() {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timeout);
+        void supabase.removeChannel(channel);
+        resolve();
+      }
+
+      channel.subscribe((status) => {
+        if (status === "SUBSCRIBED" && !sent) {
+          sent = true;
+          void channel.send({
+            type: "broadcast",
+            event,
+            payload: {
+              ...details,
+              sessionId: activeSession.id,
+              recipientPhone: contact.phone,
+            },
+          }).then(finish, finish);
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          finish();
+        }
+      });
+    })));
+  }, [activeSession, sharedContacts]);
+
+  const requestCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setLocationStatus("denied");
+      return;
+    }
+
+    setLocationStatus("requesting");
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        setLocationCoords({ latitude: coords.latitude, longitude: coords.longitude });
+        setLocationUpdatedAt(new Date());
+        setLocationStatus("granted");
+      },
+      () => setLocationStatus("denied"),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+    );
+  };
+
+  useEffect(() => {
+    if (!activeSession || !navigator.geolocation) return;
+
+    const updateLocation = () => {
+      navigator.geolocation.getCurrentPosition(
+        ({ coords }) => {
+          setLocationCoords({ latitude: coords.latitude, longitude: coords.longitude });
+          setLocationUpdatedAt(new Date());
+          setLocationStatus("granted");
+        },
+        () => setLocationStatus("denied"),
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+      );
+    };
+
+    updateLocation();
+    const interval = setInterval(updateLocation, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [activeSession]);
 
   // Dynamic Day Options for Return Picker
   const dayOptions = useMemo(() => {
@@ -163,14 +251,20 @@ export function SessionPage({
         }
 
         // Guardian Overdue Alert Notification Trigger
-        const guardianOverdueSecs = -(activeAlertConfig.guardianMins * 60);
-        if (diffSecs <= guardianOverdueSecs && !guardianNotificationFired) {
+        const guardianDueAt = targetEndTime + activeAlertConfig.guardianMins * 60 * 1000;
+        if (Date.now() >= guardianDueAt && !guardianNotificationFiredRef.current) {
+          guardianNotificationFiredRef.current = true;
           if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
             new Notification("🚨 Guardian Alert Escalated", {
-              body: `Session overdue! Automated alert dispatched to your guardians.`,
+              body: "Your session is overdue.",
               icon: "/loci-dark.png",
             });
           }
+          void dispatchGuardianBroadcast("guardian_alert_due", {
+            destination: activeSession?.destination,
+            expectedArrivalAt: new Date(targetEndTime).toISOString(),
+            message: "This session is overdue. Please check in with your guardian.",
+          });
           setGuardianNotificationFired(true);
         }
       }
@@ -179,7 +273,7 @@ export function SessionPage({
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [targetEndTime, activeAlertConfig, reminderNotificationFired, guardianNotificationFired]);
+  }, [targetEndTime, activeAlertConfig, reminderNotificationFired, guardianNotificationFired, dispatchGuardianBroadcast, activeSession?.destination]);
 
   const formatTime = (totalSecs: number) => {
     const hrs = Math.floor(totalSecs / 3600);
@@ -304,9 +398,21 @@ export function SessionPage({
     const gMins = Number(guardianAlertMins) || 5;
     const sMins = Number(selfReminderMins) || 5;
     setActiveAlertConfig({ guardianMins: gMins, selfMins: sMins });
+    guardianNotificationFiredRef.current = false;
     setGuardianNotificationFired(false);
     setReminderNotificationFired(false);
     setShowAlertModal(false);
+  };
+
+  const handleEndSession = () => {
+    if (activeSession) {
+      void dispatchGuardianBroadcast("session_completed", {
+        destination: activeSession.destination,
+        completedAt: new Date().toISOString(),
+        message: "This session has ended safely.",
+      });
+    }
+    handleCompleteSession();
   };
 
   return (
@@ -374,7 +480,7 @@ export function SessionPage({
                 <MapPin className="w-6 h-6 text-yellow-400" />
               </div>
 
-              <div className="flex items-center justify-center -space-x-2">
+              <div className="flex flex-wrap items-center justify-center gap-3 px-2">
                 {sharedContacts.length === 0 ? (
                   <div className="w-9 h-9 rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center border-2 border-black">
                     <User className="w-4 h-4" />
@@ -383,19 +489,24 @@ export function SessionPage({
                   sharedContacts.map((c) => (
                     <div
                       key={c.id}
-                      className="relative group"
+                      className="flex flex-col items-center gap-1.5"
                       title={`${c.name} (${c.isLociUser ? "Loci Guardian Active" : "SMS Alert Ready"})`}
                     >
-                      <div className="w-9 h-9 rounded-full bg-zinc-900 text-yellow-400 border-2 border-black font-black text-[11px] flex items-center justify-center uppercase shadow-md">
-                        {c.name.slice(0, 2)}
-                      </div>
-                      <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-black border border-zinc-800 flex items-center justify-center">
-                        {c.isLociUser ? (
-                          <Zap className="w-2.5 h-2.5 text-yellow-400 fill-yellow-400" />
+                      <div className="relative w-10 h-10 rounded-full overflow-hidden bg-zinc-900 text-yellow-400 border-2 border-black font-black text-[11px] flex items-center justify-center uppercase shadow-md">
+                        {c.avatar_url ? (
+                          <img src={c.avatar_url} alt={`${c.name}'s profile`} className="w-full h-full object-cover" />
                         ) : (
-                          <MessageSquare className="w-2 h-2 text-zinc-400" />
+                          c.name.slice(0, 2)
                         )}
+                        <div className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-black border border-zinc-800 flex items-center justify-center">
+                          {c.isLociUser ? (
+                            <Zap className="w-2.5 h-2.5 text-yellow-400 fill-yellow-400" />
+                          ) : (
+                            <MessageSquare className="w-2 h-2 text-zinc-400" />
+                          )}
+                        </div>
                       </div>
+                      <span className="max-w-20 truncate text-[10px] font-bold text-zinc-600 dark:text-zinc-300">{c.name}</span>
                     </div>
                   ))
                 )}
@@ -443,20 +554,60 @@ export function SessionPage({
               )}
 
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xs leading-relaxed">
-                Alerts your contacts to check on you if you haven't checked in within the specified time.
+                {activeAlertConfig
+                  ? "Your alert timers are active and will notify your selected guardians if needed."
+                  : "Configure and activate alert timers to notify your selected guardians if you are overdue."}
               </p>
             </div>
 
-            {/* Pure Globe Only (No Badges) */}
-            <div className="w-full flex items-center justify-center py-2">
-              <Globe showBadge={false} />
+            <div className="space-y-3">
+              <div className="rounded-2xl border border-zinc-200/70 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/70 p-3.5 space-y-2.5">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <MapPin className={`w-4 h-4 shrink-0 ${locationStatus === "granted" ? "text-emerald-500" : "text-yellow-400"}`} />
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-extrabold text-black dark:text-white">Live location</p>
+                      <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">
+                        {locationCoords
+                          ? `${locationCoords.latitude.toFixed(5)}, ${locationCoords.longitude.toFixed(5)}`
+                          : locationStatus === "denied"
+                            ? "Location permission unavailable"
+                            : locationStatus === "requesting"
+                              ? "Requesting GPS location..."
+                              : "Waiting for GPS permission"}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={requestCurrentLocation}
+                    className="shrink-0 text-[10px] font-extrabold text-black dark:text-white px-3 py-2 rounded-full bg-yellow-400 hover:bg-yellow-300 transition-colors"
+                  >
+                    {locationStatus === "granted" ? "Refresh" : "Enable location"}
+                  </button>
+                </div>
+                {locationUpdatedAt && (
+                  <p className="text-[9px] text-zinc-400">
+                    Updated {locationUpdatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · refreshes every 5 minutes
+                  </p>
+                )}
+              </div>
+
+              {locationCoords && (
+                <iframe
+                  title="Live location map"
+                  loading="lazy"
+                  className="w-full h-52 rounded-2xl border border-zinc-200/70 dark:border-zinc-800"
+                  src={`https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(`${locationCoords.longitude - 0.01},${locationCoords.latitude - 0.01},${locationCoords.longitude + 0.01},${locationCoords.latitude + 0.01}`)}&layer=mapnik&marker=${locationCoords.latitude}%2C${locationCoords.longitude}`}
+                />
+              )}
             </div>
           </div>
 
           {/* End Session Button */}
           <div className="pb-6">
             <button
-              onClick={handleCompleteSession}
+              onClick={handleEndSession}
               disabled={sessionLoading}
               className="w-full bg-red-600 hover:bg-red-700 text-white font-extrabold py-4 rounded-full text-xs transition-all flex items-center justify-center space-x-2 active:scale-95 shadow-lg shadow-red-600/20"
             >
@@ -523,7 +674,7 @@ export function SessionPage({
                   onClick={handleSaveAlertTimer}
                   className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-full text-xs transition-all active:scale-95 shadow-md shadow-yellow-400/20"
                 >
-                  Save Timers
+                  Activate Alert Timers
                 </button>
               </div>
             </div>
@@ -639,6 +790,23 @@ export function SessionPage({
                 </span>
               </div>
 
+              <div className="grid grid-cols-2 gap-1 rounded-full bg-zinc-200/70 dark:bg-zinc-900 p-1">
+                <button
+                  type="button"
+                  onClick={() => setContactSelectionMode("individual")}
+                  className={`rounded-full py-2 text-[10px] font-extrabold transition-colors ${contactSelectionMode === "individual" ? "bg-yellow-400 text-black" : "text-zinc-500 dark:text-zinc-400"}`}
+                >
+                  Individual Guardians
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setContactSelectionMode("groups")}
+                  className={`rounded-full py-2 text-[10px] font-extrabold transition-colors ${contactSelectionMode === "groups" ? "bg-yellow-400 text-black" : "text-zinc-500 dark:text-zinc-400"}`}
+                >
+                  Circle Groups
+                </button>
+              </div>
+
               {contacts.length === 0 ? (
                 <div className="p-3.5 bg-zinc-200/60 dark:bg-zinc-900/60 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl text-[11px] font-bold text-zinc-600 dark:text-zinc-400 flex items-center justify-between">
                   <span>⚠️ No contacts added yet.</span>
@@ -649,6 +817,38 @@ export function SessionPage({
                   >
                     Add Circle
                   </button>
+                </div>
+              ) : contactSelectionMode === "groups" ? (
+                <div className="flex items-center space-x-2.5 overflow-x-auto pb-1 scrollbar-none">
+                  {contactGroups.length === 0 ? (
+                    <p className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400 px-1">No circle groups are assigned to your guardians.</p>
+                  ) : contactGroups.map((group) => {
+                    const groupContacts = contacts.filter((contact) => contact.group_category === group);
+                    const isSelected = groupContacts.length > 0 && groupContacts.every((contact) => selectedContactIds.includes(contact.id));
+                    return (
+                      <button
+                        key={group}
+                        type="button"
+                        onClick={() => {
+                          groupContacts.forEach((contact) => {
+                            const selected = selectedContactIds.includes(contact.id);
+                            if (isSelected ? selected : !selected) toggleContactSelection(contact.id);
+                          });
+                        }}
+                        className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-full text-xs font-extrabold transition-all border shrink-0 active:scale-95 ${
+                          isSelected
+                            ? "bg-black dark:bg-white text-white dark:text-black border-black dark:border-white shadow-sm"
+                            : "bg-zinc-200/60 dark:bg-zinc-900/80 text-zinc-500 border-zinc-300/50 dark:border-zinc-800"
+                        }`}
+                      >
+                        <div className={`w-4 h-4 rounded-full flex items-center justify-center ${isSelected ? "bg-yellow-400 text-black" : "bg-zinc-300 dark:bg-zinc-800 text-transparent"}`}>
+                          <Check className="w-2.5 h-2.5 stroke-3" />
+                        </div>
+                        <span>{group}</span>
+                        <span className="text-[9px] opacity-70">{groupContacts.length}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="flex items-center space-x-2.5 overflow-x-auto pb-1 scrollbar-none">

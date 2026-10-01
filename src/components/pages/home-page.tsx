@@ -1,12 +1,14 @@
 "use client";
 
-import React from "react";
-import { Plus, Shield, Sparkles, Clock, ShieldAlert, ChevronRight } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { Plus, Shield, Sparkles, Clock, ChevronRight } from "lucide-react";
 
 interface Contact {
   id: string;
   name: string;
   phone: string;
+  isLociUser?: boolean;
+  avatar_url?: string;
 }
 
 interface ActiveSession {
@@ -14,11 +16,21 @@ interface ActiveSession {
   destination: string;
   expected_arrival_at: string;
   status: "active" | "completed" | "missed" | "escalated";
+  notes?: string | null;
+}
+
+interface ReceivedSession {
+  id: string;
+  friendName: string;
+  avatarUrl?: string;
+  destination: string;
+  expected_arrival_at: string;
 }
 
 interface HomePageProps {
   contacts: Contact[];
   activeSession: ActiveSession | null;
+  receivedSessions: ReceivedSession[];
   currentBanner: number;
   setCurrentBanner: (i: number) => void;
   banners: Array<{ id: number; tag: string; title: string; desc: string; bg: string }>;
@@ -31,6 +43,7 @@ interface HomePageProps {
 export function HomePage({
   contacts,
   activeSession,
+  receivedSessions,
   currentBanner,
   setCurrentBanner,
   banners,
@@ -39,6 +52,32 @@ export function HomePage({
   handleCompleteSession,
   onNavigate,
 }: HomePageProps) {
+  const [remainingSeconds, setRemainingSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!activeSession) return;
+
+    const updateRemainingTime = () => {
+      const secondsLeft = Math.floor(
+        (new Date(activeSession.expected_arrival_at).getTime() - Date.now()) / 1000
+      );
+      setRemainingSeconds(Math.max(0, secondsLeft));
+    };
+
+    updateRemainingTime();
+    const interval = setInterval(updateRemainingTime, 1000);
+    return () => clearInterval(interval);
+  }, [activeSession]);
+
+  const formatCountdown = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remaining = seconds % 60;
+    return [hours, minutes, remaining]
+      .map((part) => String(part).padStart(2, "0"))
+      .join(":");
+  };
+
   return (
     <>
       {/* Banner Carousel */}
@@ -104,8 +143,12 @@ export function HomePage({
 
           {contacts.map((c) => (
             <div key={c.id} className="flex flex-col items-center space-y-1 shrink-0">
-              <div className="w-12 h-12 rounded-full bg-zinc-900 text-yellow-400 border border-yellow-400/80 font-black text-xs flex items-center justify-center uppercase shadow-sm">
-                {c.name.slice(0, 2)}
+              <div className="w-12 h-12 rounded-full overflow-hidden bg-zinc-900 text-yellow-400 border border-yellow-400/80 font-black text-xs flex items-center justify-center uppercase shadow-sm">
+                {c.isLociUser && c.avatar_url ? (
+                  <img src={c.avatar_url} alt={`${c.name}'s profile`} className="w-full h-full object-cover" />
+                ) : (
+                  c.name.slice(0, 2)
+                )}
               </div>
               <span className="text-[9px] font-bold text-zinc-600 dark:text-zinc-400 max-w-12 truncate">
                 {c.name}
@@ -117,11 +160,11 @@ export function HomePage({
 
       {/* Walk Home Entry Card */}
       {activeSession ? (
-        <div className="bg-yellow-400 text-black rounded-[26px] p-5 shadow-lg space-y-4 relative overflow-hidden">
+        <div className="bg-yellow-400 text-black rounded-[26px] p-5 shadow-lg space-y-3 relative overflow-hidden">
           <div className="flex items-center justify-between">
             <span className="inline-flex items-center space-x-1 text-[9px] font-black uppercase tracking-wider bg-black text-yellow-400 px-2.5 py-1 rounded-full">
               <Sparkles className="w-3 h-3 text-yellow-400" />
-              <span>Active Journey 🔥</span>
+              <span>Active Session</span>
             </span>
             <Clock className="w-4 h-4 text-black" />
           </div>
@@ -133,7 +176,7 @@ export function HomePage({
 
           <div className="bg-black/10 backdrop-blur-md p-3 rounded-2xl flex items-center justify-between">
             <div>
-              <p className="text-[9px] font-bold uppercase text-black/70">ETA</p>
+              <p className="text-[9px] font-bold uppercase text-black/70">Expected Arrival</p>
               <p className="text-sm font-black font-mono">
                 {new Date(activeSession.expected_arrival_at).toLocaleTimeString([], {
                   hour: "2-digit",
@@ -141,8 +184,20 @@ export function HomePage({
                 })}
               </p>
             </div>
-            <ShieldAlert className="w-6 h-6 text-black" />
+            <div className="text-right">
+              <p className="text-[9px] font-bold uppercase text-black/70">Remaining</p>
+              <p className="text-sm font-black font-mono">
+                {remainingSeconds > 0 ? formatCountdown(remainingSeconds) : "Overdue"}
+              </p>
+            </div>
           </div>
+
+          {activeSession.notes && (
+            <div className="bg-black/10 p-3 rounded-2xl">
+              <p className="text-[9px] font-bold uppercase text-black/70">Notes</p>
+              <p className="text-xs font-semibold mt-1">{activeSession.notes}</p>
+            </div>
+          )}
 
           <button
             onClick={handleCompleteSession}
@@ -162,7 +217,7 @@ export function HomePage({
             </div>
             <div>
               <h2 className="text-sm font-black text-black dark:text-white flex items-center space-x-1">
-                <span>Start Walk Home Session</span>
+                <span>Start session</span>
                 <span>🚀</span>
               </h2>
               <p className="text-[11px] font-medium text-zinc-400 mt-0.5">
@@ -172,6 +227,57 @@ export function HomePage({
           </div>
           <ChevronRight className="w-5 h-5 text-zinc-400 group-hover:text-black dark:group-hover:text-white transition-colors shrink-0" />
         </div>
+      )}
+
+      {receivedSessions.length > 0 && (
+        <section className="space-y-2.5">
+          <div className="flex items-center justify-between px-1">
+            <h2 className="text-xs font-black uppercase tracking-wider text-black dark:text-white">
+              Live Sessions From Your Circle
+            </h2>
+            <span className="text-[10px] bg-yellow-400 text-black px-1.5 py-0.5 rounded-full font-black">
+              {receivedSessions.length}
+            </span>
+          </div>
+          <div className="space-y-2">
+            {receivedSessions.map((session) => (
+              <div key={session.id} className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-2xl border border-zinc-200/50 dark:border-zinc-800/50 rounded-2xl p-3.5 shadow-sm space-y-3">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 rounded-full overflow-hidden shrink-0 bg-zinc-900 text-yellow-400 border border-yellow-400/70 font-black text-xs flex items-center justify-center uppercase">
+                    {session.avatarUrl ? (
+                      <img src={session.avatarUrl} alt={`${session.friendName}'s profile`} className="w-full h-full object-cover" />
+                    ) : (
+                      session.friendName.slice(0, 2)
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black text-black dark:text-white truncate">{session.friendName}</p>
+                    <p className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400">Active live session</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[9px] font-bold uppercase text-zinc-400">Destination</p>
+                    <p className="text-xs font-bold text-black dark:text-white truncate">{session.destination}</p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-bold uppercase text-zinc-400">Expected Arrival</p>
+                    <p className="text-xs font-black font-mono text-black dark:text-white">
+                      {new Date(session.expected_arrival_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onNavigate("contacts")}
+                  className="w-full bg-yellow-400 hover:bg-yellow-300 text-black font-black py-2.5 rounded-xl text-[11px] transition-colors flex items-center justify-center space-x-2"
+                >
+                  <span>View Live Feed</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
     </>
   );

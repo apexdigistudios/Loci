@@ -29,6 +29,7 @@ export interface Contact {
   phone: string;
   group_category?: string;
   isLociUser?: boolean;
+  avatar_url?: string;
 }
 
 interface SharedSession {
@@ -36,14 +37,64 @@ interface SharedSession {
   user_phone: string;
   destination: string;
   expected_arrival_at: string;
-  status: "active" | "completed" | "missed" | "escalated";
+  status: "active" | "completed" | "missed" | "escalated" | "expired";
   notes?: string;
   media_url?: string;
   created_at: string;
+  [key: string]: unknown;
   user?: {
     nickname?: string;
     full_name?: string;
+    avatar_url?: string;
   };
+}
+
+function getSessionCoordinates(session: SharedSession) {
+  const row = session as Record<string, unknown>;
+  const locationValue = row.location ?? row.last_location ?? row.location_coords ?? row.last_reported_location;
+  const location = locationValue && typeof locationValue === "object"
+    ? locationValue as Record<string, unknown>
+    : {};
+  const readCoordinate = (...values: unknown[]) => {
+    const value = values.find((candidate) => candidate !== undefined && candidate !== null && candidate !== "");
+    const coordinate = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(coordinate) ? coordinate : null;
+  };
+  const geoJsonCoordinates = Array.isArray(location.coordinates) ? location.coordinates : [];
+  const latitude = readCoordinate(row.latitude, row.lat, row.location_latitude, row.last_latitude, location.latitude, location.lat, geoJsonCoordinates[1]);
+  const longitude = readCoordinate(row.longitude, row.lng, row.location_longitude, row.last_longitude, location.longitude, location.lng, geoJsonCoordinates[0]);
+
+  return latitude !== null && longitude !== null && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180
+    ? { latitude, longitude }
+    : null;
+}
+
+function formatSessionDuration(startedAt: string, expectedArrivalAt: string) {
+  const totalMinutes = Math.max(0, Math.round((new Date(expectedArrivalAt).getTime() - new Date(startedAt).getTime()) / 60000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+}
+
+function getSessionParticipantNames(session: SharedSession, contacts: Contact[], userPhone: string, ownerName: string) {
+  const row = session as Record<string, unknown>;
+  const storedParticipants = row.participants ?? row.shared_with ?? row.guardian_phones;
+  const values = Array.isArray(storedParticipants) ? storedParticipants : [];
+  const names = values.map((participant) => {
+    if (typeof participant === "string") {
+      return contacts.find((contact) => contact.phone === participant)?.name || participant;
+    }
+    if (participant && typeof participant === "object") {
+      const detail = participant as Record<string, unknown>;
+      const phone = typeof detail.phone === "string" ? detail.phone : "";
+      return (typeof detail.name === "string" && detail.name)
+        || contacts.find((contact) => contact.phone === phone)?.name
+        || phone;
+    }
+    return "";
+  });
+
+  return Array.from(new Set([session.user_phone === userPhone ? "You" : ownerName, ...names].filter(Boolean)));
 }
 
 interface CustomGroup {
@@ -138,6 +189,7 @@ export function ContactsPage({
 
   // Shared Sessions State
   const [sharedSessions, setSharedSessions] = useState<SharedSession[]>([]);
+  const [historySessions, setHistorySessions] = useState<SharedSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [activeDetailSession, setActiveDetailSession] = useState<SharedSession | null>(null);
 
@@ -146,46 +198,39 @@ export function ContactsPage({
   const fetchSharedSessions = useCallback(async () => {
     setSessionsLoading(true);
     try {
-      const contactPhones = contacts.map((c) => c.phone);
+      const participantPhones = [...new Set([...contacts.map((c) => c.phone), userPhone])];
 
       const { data, error } = await supabase
         .from("checkin_sessions")
-        .select(`
-          id,
-          user_phone,
-          destination,
-          expected_arrival_at,
-          status,
-          notes,
-          media_url,
-          created_at
-        `)
-        .eq("status", "active")
+        .select("*")
+        .in("user_phone", participantPhones)
         .order("created_at", { ascending: false });
 
       if (!error && data) {
-        const matchingSessions = data.filter(
-          (s) => contactPhones.includes(s.user_phone) || s.user_phone !== userPhone
-        );
-
-        const senderPhones = Array.from(new Set(matchingSessions.map((s) => s.user_phone)));
+        const senderPhones = Array.from(new Set(data.map((s) => s.user_phone)));
 
         const { data: usersData } = await supabase
           .from("users")
-          .select("phone, nickname, full_name")
+          .select("phone, nickname, full_name, avatar_url")
           .in("phone", senderPhones.length > 0 ? senderPhones : ["none"]);
 
-        const formatted = matchingSessions.map((session) => {
+        const formatted = data.map((session) => {
           const matchedUser = usersData?.find((u) => u.phone === session.user_phone);
           return {
             ...session,
             user: matchedUser
-              ? { nickname: matchedUser.nickname, full_name: matchedUser.full_name }
+              ? { nickname: matchedUser.nickname, full_name: matchedUser.full_name, avatar_url: matchedUser.avatar_url }
               : undefined,
-          };
+          } as SharedSession;
         });
 
-        setSharedSessions(formatted);
+        const now = Date.now();
+        setSharedSessions(formatted.filter((session) =>
+          session.status === "active" && new Date(session.expected_arrival_at).getTime() >= now
+        ));
+        setHistorySessions(formatted.filter((session) =>
+          session.status !== "active" || new Date(session.expected_arrival_at).getTime() < now
+        ));
       }
     } catch (err) {
       console.error("Error fetching shared sessions:", err);
@@ -453,8 +498,12 @@ export function ContactsPage({
                       className="bg-white/80 dark:bg-zinc-900/60 border border-zinc-200/50 dark:border-zinc-800/50 px-4 py-3.5 rounded-2xl flex items-center justify-between shadow-sm"
                     >
                       <div className="flex items-center space-x-3">
-                        <div className="w-10 h-10 rounded-full bg-zinc-900 text-yellow-400 font-black text-xs flex items-center justify-center uppercase border border-yellow-400/40">
-                          {c.name.slice(0, 2)}
+                        <div className="w-10 h-10 rounded-full overflow-hidden bg-zinc-900 text-yellow-400 font-black text-xs flex items-center justify-center uppercase border border-yellow-400/40">
+                          {c.isLociUser && c.avatar_url ? (
+                            <img src={c.avatar_url} alt={`${c.name}'s profile`} className="w-full h-full object-cover" />
+                          ) : (
+                            c.name.slice(0, 2)
+                          )}
                         </div>
                         <div>
                           <div className="flex items-center space-x-1.5">
@@ -738,49 +787,115 @@ export function ContactsPage({
                   s.user?.nickname ||
                   s.user?.full_name ||
                   contacts.find((c) => c.phone === s.user_phone)?.name ||
-                  s.user_phone;
+                  (s.user_phone === userPhone ? "You" : s.user_phone);
+                const coordinates = getSessionCoordinates(s);
+                const timestamp = new Date(s.created_at);
 
                 return (
                   <div
                     key={s.id}
                     onClick={() => setActiveDetailSession(s)}
-                    className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 p-4 rounded-[22px] shadow-sm flex items-center justify-between cursor-pointer hover:border-yellow-400/50 active:scale-[0.98] transition-all group"
+                    className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 p-4 rounded-[22px] shadow-sm space-y-3 cursor-pointer hover:border-yellow-400/50 active:scale-[0.99] transition-all group"
                   >
-                    <div className="flex items-center space-x-3.5">
-                      <div className="relative">
-                        <div className="w-11 h-11 rounded-full bg-zinc-900 text-yellow-400 font-black text-sm flex items-center justify-center uppercase border border-yellow-400">
-                          {displayName.slice(0, 2)}
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center space-x-3.5 min-w-0">
+                        <div className="relative shrink-0">
+                          <div className="w-11 h-11 rounded-full overflow-hidden bg-zinc-900 text-yellow-400 font-black text-sm flex items-center justify-center uppercase border border-yellow-400">
+                            {s.user?.avatar_url ? (
+                              <img src={s.user.avatar_url} alt={`${displayName}'s profile`} className="w-full h-full object-cover" />
+                            ) : (
+                              displayName.slice(0, 2)
+                            )}
+                          </div>
+                          <span className="w-3 h-3 bg-emerald-500 border-2 border-white dark:border-black rounded-full absolute bottom-0 right-0 animate-ping" />
                         </div>
-                        <span className="w-3 h-3 bg-emerald-500 border-2 border-white dark:border-black rounded-full absolute bottom-0 right-0 animate-ping" />
-                      </div>
 
-                      <div>
-                        <div className="flex items-center space-x-1.5">
-                          <p className="text-xs font-extrabold text-black dark:text-white">
-                            {displayName}
+                        <div className="min-w-0">
+                          <div className="flex items-center space-x-1.5">
+                            <p className="text-xs font-extrabold text-black dark:text-white truncate">{displayName}</p>
+                            <span className="text-[9px] font-black uppercase bg-yellow-400 text-black px-1.5 py-0.2 rounded-full">LIVE</span>
+                          </div>
+                          <p className="text-[10px] text-zinc-400 mt-0.5">
+                            {Number.isNaN(timestamp.getTime()) ? "Recently" : timestamp.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                           </p>
-                          <span className="text-[9px] font-black uppercase bg-yellow-400 text-black px-1.5 py-0.2 rounded-full">
-                            LIVE
-                          </span>
                         </div>
-                        <p className="text-[11px] text-zinc-400 mt-0.5 flex items-center space-x-1">
-                          <MapPin className="w-3 h-3 text-yellow-500" />
-                          <span className="truncate max-w-44">{s.destination}</span>
-                        </p>
                       </div>
+                      <ChevronRight className="w-4 h-4 text-zinc-400 group-hover:text-black dark:group-hover:text-white transition-colors shrink-0" />
                     </div>
 
-                    <ChevronRight className="w-4 h-4 text-zinc-400 group-hover:text-black dark:group-hover:text-white transition-colors" />
+                    <div className="space-y-2">
+                      <p className="text-[11px] text-black dark:text-white flex items-start space-x-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-yellow-500 shrink-0 mt-0.5" />
+                        <span className="font-bold">{s.destination}</span>
+                      </p>
+                      {s.notes && (
+                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 line-clamp-2">{s.notes}</p>
+                      )}
+                      {coordinates ? (
+                        <iframe
+                          title={`${displayName}'s last reported location`}
+                          loading="lazy"
+                          className="w-full h-36 rounded-xl border border-zinc-200 dark:border-zinc-800 pointer-events-none"
+                          src={`https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(`${coordinates.longitude - 0.01},${coordinates.latitude - 0.01},${coordinates.longitude + 0.01},${coordinates.latitude + 0.01}`)}&layer=mapnik&marker=${coordinates.latitude}%2C${coordinates.longitude}`}
+                        />
+                      ) : (
+                        <div className="h-12 rounded-xl bg-zinc-100 dark:bg-zinc-800/70 flex items-center px-3 text-[10px] font-medium text-zinc-500 dark:text-zinc-400">
+                          Last location not shared
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })}
             </div>
           )}
 
+          <section className="space-y-2.5 pt-2">
+            <div className="flex items-center justify-between px-1">
+              <h3 className="text-sm font-black text-black dark:text-white">Recents &amp; History</h3>
+              <span className="text-[10px] font-bold text-zinc-400">{historySessions.length}</span>
+            </div>
+            {historySessions.length === 0 ? (
+              <p className="text-[11px] text-zinc-400 px-1">Completed and expired sessions will appear here.</p>
+            ) : (
+              <div className="space-y-2">
+                {historySessions.map((session) => {
+                  const displayName = session.user?.nickname
+                    || session.user?.full_name
+                    || contacts.find((contact) => contact.phone === session.user_phone)?.name
+                    || (session.user_phone === userPhone ? "You" : session.user_phone);
+                  const expired = session.status === "active" || session.status === "missed" || session.status === "expired";
+                  return (
+                    <button
+                      key={session.id}
+                      type="button"
+                      onClick={() => setActiveDetailSession(session)}
+                      className="w-full bg-white/80 dark:bg-zinc-900/70 border border-zinc-200/50 dark:border-zinc-800/50 p-3.5 rounded-2xl flex items-center justify-between text-left hover:border-yellow-400/50 transition-colors"
+                    >
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-2">
+                          <span className="text-xs font-extrabold text-black dark:text-white truncate">{displayName}</span>
+                          <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-full ${expired ? "bg-red-500/15 text-red-500" : "bg-zinc-200 dark:bg-zinc-800 text-zinc-500"}`}>
+                            {expired ? "Expired" : session.status}
+                          </span>
+                        </span>
+                        <span className="block text-[11px] text-zinc-500 dark:text-zinc-400 truncate mt-1">{session.destination}</span>
+                        <span className="block text-[10px] text-zinc-400 mt-0.5">
+                          {new Date(session.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </span>
+                      <ChevronRight className="w-4 h-4 text-zinc-400 shrink-0 ml-3" />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
           {/* SHARED SESSION DETAIL MODAL */}
           {activeDetailSession && (
             <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
-              <div className="bg-zinc-900 text-white border border-zinc-800 rounded-4xl p-6 w-full max-w-sm space-y-5 relative shadow-2xl">
+              <div className="bg-zinc-900 text-white border border-zinc-800 rounded-4xl p-6 w-full max-w-sm max-h-[90vh] overflow-y-auto space-y-5 relative shadow-2xl">
                 <button
                   onClick={() => setActiveDetailSession(null)}
                   className="absolute top-4 right-4 p-2 rounded-full bg-zinc-800 text-zinc-400 hover:text-white active:scale-90 transition-all"
@@ -789,12 +904,12 @@ export function ContactsPage({
                 </button>
 
                 <div className="flex items-center space-x-3 pt-1">
-                  <div className="w-14 h-14 rounded-full bg-yellow-400 text-black font-black text-lg flex items-center justify-center uppercase shadow-md">
-                    {(
-                      activeDetailSession.user?.nickname ||
-                      contacts.find((c) => c.phone === activeDetailSession.user_phone)?.name ||
-                      "ME"
-                    ).slice(0, 2)}
+                  <div className="w-14 h-14 rounded-full overflow-hidden bg-yellow-400 text-black font-black text-lg flex items-center justify-center uppercase shadow-md shrink-0">
+                    {activeDetailSession.user?.avatar_url ? (
+                      <img src={activeDetailSession.user.avatar_url} alt="Session sender profile" className="w-full h-full object-cover" />
+                    ) : (
+                      (activeDetailSession.user?.nickname || contacts.find((c) => c.phone === activeDetailSession.user_phone)?.name || "ME").slice(0, 2)
+                    )}
                   </div>
                   <div>
                     <h3 className="text-base font-black text-white">
@@ -810,7 +925,7 @@ export function ContactsPage({
                   <div className="flex items-center justify-between">
                     <span className="inline-flex items-center space-x-1 text-[9px] font-black uppercase bg-black text-yellow-400 px-2 py-0.5 rounded-full">
                       <Sparkles className="w-3 h-3 text-yellow-400" />
-                      <span>Live Journey Active</span>
+                      <span>{activeDetailSession.status === "active" ? "Live Journey Active" : `Session ${activeDetailSession.status}`}</span>
                     </span>
                     <Clock className="w-4 h-4 text-black" />
                   </div>
@@ -832,6 +947,31 @@ export function ContactsPage({
                     </div>
                     <ShieldAlert className="w-5 h-5 text-black" />
                   </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-[11px]">
+                  <div className="bg-zinc-800/80 rounded-xl p-3">
+                    <p className="text-[9px] font-black uppercase text-zinc-400">Session Started</p>
+                    <p className="mt-1 font-semibold text-zinc-100">{new Date(activeDetailSession.created_at).toLocaleString()}</p>
+                  </div>
+                  <div className="bg-zinc-800/80 rounded-xl p-3">
+                    <p className="text-[9px] font-black uppercase text-zinc-400">Duration</p>
+                    <p className="mt-1 font-semibold text-zinc-100">
+                      {formatSessionDuration(activeDetailSession.created_at, activeDetailSession.expected_arrival_at)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="bg-zinc-800/80 border border-zinc-700/60 p-3.5 rounded-2xl text-xs space-y-1">
+                  <p className="text-[10px] font-black uppercase text-zinc-400">Participants</p>
+                  <p className="text-zinc-200">
+                    {getSessionParticipantNames(
+                      activeDetailSession,
+                      contacts,
+                      userPhone,
+                      activeDetailSession.user?.nickname || activeDetailSession.user?.full_name || "Circle Friend"
+                    ).join(", ")}
+                  </p>
                 </div>
 
                 {activeDetailSession.notes && (

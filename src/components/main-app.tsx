@@ -21,6 +21,17 @@ interface ActiveSession {
   destination: string;
   expected_arrival_at: string;
   status: "active" | "completed" | "missed" | "escalated";
+  notes?: string | null;
+}
+
+interface ReceivedSession {
+  id: string;
+  user_phone: string;
+  destination: string;
+  expected_arrival_at: string;
+  status: "active" | "completed" | "missed" | "escalated";
+  friendName: string;
+  avatarUrl?: string;
 }
 
 const BANNERS = [
@@ -55,6 +66,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
   const [activeSession, setActiveSession] = useState<ActiveSession | null>(null);
+  const [receivedSessions, setReceivedSessions] = useState<ReceivedSession[]>([]);
 
   const [destination, setDestination] = useState("");
   const [durationMinutes, setDurationMinutes] = useState<number | "">(30);
@@ -162,7 +174,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
       const { data: sessionData } = await supabase
         .from("checkin_sessions")
-        .select("id, destination, expected_arrival_at, status")
+        .select("id, destination, expected_arrival_at, status, notes")
         .eq("user_phone", userPhone)
         .eq("status", "active")
         .order("created_at", { ascending: false })
@@ -198,9 +210,53 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     loadUserData();
   }, [loadUserData]);
 
+  const fetchReceivedSessions = useCallback(async () => {
+    const contactPhones = contacts.map((contact) => contact.phone);
+    if (contactPhones.length === 0) {
+      setReceivedSessions([]);
+      return;
+    }
+
+    const { data: sessions, error } = await supabase
+      .from("checkin_sessions")
+      .select("id, user_phone, destination, expected_arrival_at, status")
+      .in("user_phone", contactPhones)
+      .eq("status", "active")
+      .order("created_at", { ascending: false });
+
+    if (error || !sessions) {
+      console.error("Failed to load received sessions:", error);
+      return;
+    }
+
+    const senderPhones = Array.from(new Set(sessions.map((session) => session.user_phone)));
+    const { data: users } = await supabase
+      .from("users")
+      .select("phone, nickname, full_name, avatar_url")
+      .in("phone", senderPhones);
+
+    setReceivedSessions(
+      sessions.map((session) => {
+        const contact = contacts.find((item) => item.phone === session.user_phone);
+        const user = users?.find((item) => item.phone === session.user_phone);
+        return {
+          ...session,
+          friendName: user?.nickname || user?.full_name || contact?.name || "Circle Friend",
+          avatarUrl: user?.avatar_url || undefined,
+        };
+      })
+    );
+  }, [contacts]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void fetchReceivedSessions();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [fetchReceivedSessions]);
+
   // Global Realtime Sessions Listener
   useEffect(() => {
-    if (contacts.length === 0) return;
     const contactPhones = contacts.map((c) => c.phone);
 
     const channel = supabase
@@ -208,19 +264,38 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       .on(
         "postgres_changes",
         {
-          event: "INSERT",
+          event: "*",
           schema: "public",
           table: "checkin_sessions",
         },
         (payload) => {
-          const newSession = payload.new;
-          if (newSession && contactPhones.includes(newSession.user_phone) && newSession.status === "active") {
-            const friendName = contacts.find((c) => c.phone === newSession.user_phone)?.name || "A friend in your circle";
+          const newSession = payload.new as Partial<ReceivedSession>;
+          const oldSession = payload.old as Partial<ReceivedSession>;
+          const changedSession = newSession.user_phone ? newSession : oldSession;
+          if (changedSession.user_phone && contactPhones.includes(changedSession.user_phone)) {
+            fetchReceivedSessions();
+            const friendName = contacts.find((c) => c.phone === changedSession.user_phone)?.name || "A friend in your circle";
+            const canNotify = typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted";
 
-            if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            if (payload.eventType === "INSERT" && newSession.status === "active" && canNotify) {
               new Notification("🚨 Circle Safety Alert", {
                 body: `${friendName} just started a live watch session heading to ${newSession.destination}!`,
                 icon: "/loci-dark.png",
+              });
+            }
+
+            if (payload.eventType === "UPDATE" && oldSession.status !== "completed" && newSession.status === "completed" && canNotify) {
+              new Notification("🛡️ Session Completed", {
+                body: `🛡️ ${friendName} completed their safety session safely.`,
+                icon: "/loci-dark.png",
+              });
+            }
+
+            if (payload.eventType === "UPDATE" && oldSession.status !== "escalated" && newSession.status === "escalated" && canNotify) {
+              new Notification("🚨 SAFETY ALERT", {
+                body: `🚨 SAFETY ALERT: ${friendName} has an overdue session!`,
+                icon: "/loci-dark.png",
+                tag: `overdue-session-${newSession.id}`,
               });
             }
           }
@@ -228,10 +303,35 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       )
       .subscribe();
 
+    const alertChannel = supabase
+      .channel(`guardian-alert-${encodeURIComponent(userPhone)}`)
+      .on("broadcast", { event: "guardian_alert_due" }, async ({ payload }) => {
+        const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : "";
+        const recipientPhone = typeof payload?.recipientPhone === "string" ? payload.recipientPhone : "";
+        if (!sessionId || recipientPhone !== userPhone) return;
+
+        const { data: session } = await supabase
+          .from("checkin_sessions")
+          .select("user_phone")
+          .eq("id", sessionId)
+          .maybeSingle();
+        const friendName = contacts.find((contact) => contact.phone === session?.user_phone)?.name || "A friend in your circle";
+
+        if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+          new Notification("🚨 SAFETY ALERT", {
+            body: `🚨 SAFETY ALERT: ${friendName} has an overdue session!`,
+            icon: "/loci-dark.png",
+            tag: `overdue-session-${sessionId}`,
+          });
+        }
+      })
+      .subscribe();
+
     return () => {
       supabase.removeChannel(channel);
+      supabase.removeChannel(alertChannel);
     };
-  }, [contacts]);
+  }, [contacts, fetchReceivedSessions, userPhone]);
 
   useEffect(() => {
     if (!activeSession) return;
@@ -445,6 +545,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
               <HomePage
                 contacts={contacts}
                 activeSession={activeSession}
+                receivedSessions={receivedSessions}
                 currentBanner={currentBanner}
                 setCurrentBanner={setCurrentBanner}
                 banners={BANNERS}
