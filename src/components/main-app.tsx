@@ -114,7 +114,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     return () => clearInterval(timer);
   }, []);
 
-  // Requirement 1: Load active session from Supabase & localStorage cache on mount
   const loadUserData = useCallback(async () => {
     setDataLoading(true);
     try {
@@ -155,7 +154,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         setContacts([]);
       }
 
-      // Query database for persistent active session
       const { data: sessionData } = await supabase
         .from("checkin_sessions")
         .select("id, destination, expected_arrival_at, status")
@@ -193,6 +191,41 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   useEffect(() => {
     loadUserData();
   }, [loadUserData]);
+
+  // Global Supabase Realtime Listener for Friend Walk Notifications
+  useEffect(() => {
+    if (contacts.length === 0) return;
+    const contactPhones = contacts.map((c) => c.phone);
+
+    const channel = supabase
+      .channel("global_realtime_sessions")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "checkin_sessions",
+        },
+        (payload) => {
+          const newSession = payload.new;
+          if (newSession && contactPhones.includes(newSession.user_phone) && newSession.status === "active") {
+            const friendName = contacts.find((c) => c.phone === newSession.user_phone)?.name || "A friend in your circle";
+
+            if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+              new Notification("🚨 Circle Safety Alert", {
+                body: `${friendName} just started a live watch session heading to ${newSession.destination}!`,
+                icon: "/loci-dark.png",
+              });
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [contacts]);
 
   // System Notification Sync
   useEffect(() => {
@@ -274,7 +307,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     }
   };
 
-  // Requirement 2: Send device notification when user completes session
   const handleCompleteSession = async () => {
     const currentId = activeSession?.id;
     setActiveSession(null);
@@ -282,7 +314,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       localStorage.removeItem("loci_active_session");
     }
 
-    // Trigger device notification on session end
     if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
       new Notification("🛡️ Loci Session Completed", {
         body: "Your active watch session was completed safely. Guardians notified.",
@@ -351,7 +382,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
   return (
     <div className="min-h-screen bg-zinc-100/60 dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between max-w-md mx-auto w-full font-sans antialiased relative border-x border-zinc-200/50 dark:border-zinc-900 selection:bg-yellow-400 selection:text-black">
-      {/* Universal Top Header */}
+      {/* Top Header */}
       {activeTab !== "session" && (
         <header className="sticky top-0 z-30 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5 bg-white/70 dark:bg-black/70 backdrop-blur-3xl border-b border-zinc-200/40 dark:border-zinc-800/40 grid grid-cols-3 items-center">
           <div className="text-left truncate leading-none">

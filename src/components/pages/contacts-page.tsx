@@ -1,13 +1,12 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Users,
   Radio,
   Plus,
   Trash2,
   Loader2,
-  AlertCircle,
   Clock,
   ShieldAlert,
   MapPin,
@@ -15,12 +14,12 @@ import {
   Phone,
   Sparkles,
   ChevronRight,
-  User,
   Shield,
   Heart,
   UserCheck,
   ChevronLeft,
   FolderPlus,
+  Image as ImageIcon,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
@@ -47,6 +46,13 @@ interface SharedSession {
   };
 }
 
+interface CustomGroup {
+  key: string;
+  label: string;
+  desc: string;
+  imageUrl?: string;
+}
+
 interface ContactsPageProps {
   userPhone: string;
   contacts: Contact[];
@@ -64,26 +70,29 @@ const DEFAULT_GROUPS = [
   {
     key: "Emergency Circle",
     label: "Emergency Circle",
-    icon: ShieldAlert,
-    accent: "from-red-500/20 to-amber-500/10 border-red-500/30 text-red-500",
-    badgeBg: "bg-red-500/20 text-red-400 border-red-500/40",
+    image: "/pages/emergency.png",
+    accent: "from-red-950/60 via-zinc-900 to-black border-red-500/40 text-red-400",
+    badgeBg: "bg-red-500/20 text-red-300 border-red-500/40",
     desc: "First responders & primary emergency guardians",
+    isDefault: true,
   },
   {
     key: "Family",
     label: "Family",
-    icon: Heart,
-    accent: "from-yellow-400/20 to-amber-500/10 border-yellow-400/40 text-yellow-400",
-    badgeBg: "bg-yellow-400/20 text-yellow-400 border-yellow-400/40",
+    image: "/pages/family.png",
+    accent: "from-amber-950/60 via-zinc-900 to-black border-yellow-400/40 text-yellow-400",
+    badgeBg: "bg-yellow-400/20 text-yellow-300 border-yellow-400/40",
     desc: "Parents, siblings & immediate family",
+    isDefault: true,
   },
   {
     key: "Besties",
     label: "Besties",
-    icon: Sparkles,
-    accent: "from-zinc-800 to-zinc-900 border-zinc-700/60 text-zinc-200",
+    image: "/pages/besties.png",
+    accent: "from-zinc-800 via-zinc-900 to-black border-zinc-700/60 text-zinc-200",
     badgeBg: "bg-zinc-800 text-zinc-300 border-zinc-700",
     desc: "Close friends, roommates & ride partners",
+    isDefault: true,
   },
 ];
 
@@ -106,8 +115,23 @@ export function ContactsPage({
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<string>("Emergency Circle");
   const [customGroupInput, setCustomGroupInput] = useState("");
+  const [customGroupImage, setCustomGroupImage] = useState<string | null>(null);
   const [showCustomGroupField, setShowCustomGroupField] = useState(false);
-  const [customGroups, setCustomGroups] = useState<string[]>([]);
+
+  // Persistent Custom Groups State
+  const [customGroups, setCustomGroups] = useState<CustomGroup[]>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("loci_custom_groups");
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch (e) {
+          console.error("Failed to parse saved custom groups", e);
+        }
+      }
+    }
+    return [];
+  });
 
   const [importError, setImportError] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -117,19 +141,13 @@ export function ContactsPage({
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [activeDetailSession, setActiveDetailSession] = useState<SharedSession | null>(null);
 
-  useEffect(() => {
-    if (subTab === "shared") {
-      fetchSharedSessions();
-    }
-  }, [subTab, contacts]);
+  const groupImageInputRef = useRef<HTMLInputElement>(null);
 
-  // Bidirectional Supabase Contact & Session Fetching
-  const fetchSharedSessions = async () => {
+  const fetchSharedSessions = useCallback(async () => {
     setSessionsLoading(true);
     try {
       const contactPhones = contacts.map((c) => c.phone);
 
-      // Query sessions where user is either in their circle OR friend added this user
       const { data, error } = await supabase
         .from("checkin_sessions")
         .select(`
@@ -146,7 +164,6 @@ export function ContactsPage({
         .order("created_at", { ascending: false });
 
       if (!error && data) {
-        // Filter sessions by matching contact numbers or user linkage
         const matchingSessions = data.filter(
           (s) => contactPhones.includes(s.user_phone) || s.user_phone !== userPhone
         );
@@ -175,7 +192,26 @@ export function ContactsPage({
     } finally {
       setSessionsLoading(false);
     }
-  };
+  }, [contacts, userPhone]);
+
+  useEffect(() => {
+    fetchSharedSessions();
+
+    const channel = supabase
+      .channel("checkin_sessions_realtime_feed")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "checkin_sessions" },
+        () => {
+          fetchSharedSessions();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchSharedSessions]);
 
   const handleAutoPickContacts = async () => {
     setImportError(false);
@@ -222,15 +258,51 @@ export function ContactsPage({
     setImporting(false);
   };
 
+  const handleGroupImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setCustomGroupImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   const handleCreateCustomGroup = () => {
     if (!customGroupInput.trim()) return;
     const gName = customGroupInput.trim();
-    if (!customGroups.includes(gName)) {
-      setCustomGroups((prev) => [...prev, gName]);
+
+    if (!customGroups.some((cg) => cg.key === gName)) {
+      const newGroup: CustomGroup = {
+        key: gName,
+        label: gName,
+        desc: "Custom guardian group",
+        imageUrl: customGroupImage || undefined,
+      };
+      const updated = [...customGroups, newGroup];
+      setCustomGroups(updated);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("loci_custom_groups", JSON.stringify(updated));
+      }
     }
+
     setSelectedGroup(gName);
     setCustomGroupInput("");
+    setCustomGroupImage(null);
     setShowCustomGroupField(false);
+  };
+
+  const handleDeleteCustomGroup = (groupKey: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updated = customGroups.filter((cg) => cg.key !== groupKey);
+    setCustomGroups(updated);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("loci_custom_groups", JSON.stringify(updated));
+    }
+    if (activeGroupView === groupKey) {
+      setActiveGroupView(null);
+    }
   };
 
   const submitManualWithGroup = (e: React.FormEvent) => {
@@ -242,14 +314,17 @@ export function ContactsPage({
   const allGroups = [
     ...DEFAULT_GROUPS,
     ...customGroups.map((cg) => ({
-      key: cg,
-      label: cg,
-      icon: Users,
-      accent: "from-zinc-800 to-zinc-900 border-zinc-700/60 text-zinc-200",
+      key: cg.key,
+      label: cg.label,
+      image: cg.imageUrl || "",
+      accent: "from-zinc-800 via-zinc-900 to-black border-zinc-700/60 text-zinc-200",
       badgeBg: "bg-zinc-800 text-zinc-300 border-zinc-700",
-      desc: "Custom guardian group",
+      desc: cg.desc,
+      isDefault: false,
     })),
   ];
+
+  const activeGroupData = allGroups.find((g) => g.key === activeGroupView);
 
   const groupContacts = contacts.filter(
     (c) => (c.group_category || "Emergency Circle") === activeGroupView
@@ -257,7 +332,7 @@ export function ContactsPage({
 
   return (
     <div className="space-y-5">
-      {/* Top Segmented SubTab Control */}
+      {/* Top Control Bar */}
       <div className="p-1 bg-zinc-200/60 dark:bg-zinc-900/80 rounded-full grid grid-cols-2 gap-1 border border-zinc-300/40 dark:border-zinc-800">
         <button
           onClick={() => {
@@ -285,7 +360,7 @@ export function ContactsPage({
           <Radio className="w-3.5 h-3.5 text-yellow-500 animate-pulse" />
           <span>Shared Sessions</span>
           {sharedSessions.length > 0 && (
-            <span className="w-2 h-2 rounded-full bg-yellow-400 absolute top-2 right-4" />
+            <span className="w-2 h-2 rounded-full bg-yellow-400 absolute top-2 right-4 animate-ping" />
           )}
         </button>
       </div>
@@ -294,7 +369,6 @@ export function ContactsPage({
       {subTab === "contacts" && (
         <>
           {activeGroupView ? (
-            /* INDIVIDUAL GROUP PAGEVIEW DRILLDOWN */
             <div className="space-y-4 animate-in fade-in slide-in-from-right-2">
               <div className="flex items-center justify-between">
                 <button
@@ -305,31 +379,55 @@ export function ContactsPage({
                   <span className="text-xs font-bold">Groups</span>
                 </button>
 
-                <button
-                  onClick={() => {
-                    setSelectedGroup(activeGroupView);
-                    setShowAddModal(true);
-                  }}
-                  className="w-9 h-9 rounded-full bg-yellow-400 text-black flex items-center justify-center font-black active:scale-90 transition-all shadow-md shadow-yellow-400/20"
-                >
-                  <Plus className="w-5 h-5 stroke-3" />
-                </button>
-              </div>
+                <div className="flex items-center space-x-2">
+                  {!activeGroupData?.isDefault && (
+                    <button
+                      onClick={(e) => handleDeleteCustomGroup(activeGroupView, e)}
+                      className="p-2.5 rounded-full bg-red-500/20 text-red-400 hover:bg-red-500 hover:text-white transition-all active:scale-90 border border-red-500/30"
+                      title="Delete Custom Group"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
 
-              <div className="bg-zinc-900 text-white p-5 rounded-[28px] border border-zinc-800 space-y-1 relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-6 opacity-10">
-                  <Shield className="w-24 h-24 text-yellow-400" />
+                  <button
+                    onClick={() => {
+                      setSelectedGroup(activeGroupView);
+                      setShowAddModal(true);
+                    }}
+                    className="w-9 h-9 rounded-full bg-yellow-400 text-black flex items-center justify-center font-black active:scale-90 transition-all shadow-md shadow-yellow-400/20"
+                  >
+                    <Plus className="w-5 h-5 stroke-3" />
+                  </button>
                 </div>
-                <span className="text-[10px] font-black uppercase text-yellow-400 tracking-wider">
-                  Group Circle
-                </span>
-                <h3 className="text-xl font-extrabold">{activeGroupView}</h3>
-                <p className="text-xs text-zinc-400">
-                  {groupContacts.length} Linked Guardians in this circle
-                </p>
               </div>
 
-              {/* Contacts inside active group */}
+              {/* Header Image Card for Active Group */}
+              <div className="bg-zinc-900 text-white p-5 rounded-[28px] border border-zinc-800 relative overflow-hidden flex flex-col justify-end min-h-36 shadow-lg">
+                {activeGroupData?.image ? (
+                  <img
+                    src={activeGroupData.image}
+                    alt={activeGroupData.label}
+                    className="absolute inset-0 w-full h-full object-cover opacity-40"
+                  />
+                ) : (
+                  <div className="absolute top-0 right-0 p-6 opacity-10">
+                    <Shield className="w-24 h-24 text-yellow-400" />
+                  </div>
+                )}
+                <div className="absolute inset-0 bg-linear-to-t from-black via-black/50 to-transparent" />
+
+                <div className="relative z-10 space-y-0.5">
+                  <span className="text-[10px] font-black uppercase text-yellow-400 tracking-wider">
+                    Group Circle
+                  </span>
+                  <h3 className="text-xl font-extrabold">{activeGroupView}</h3>
+                  <p className="text-xs text-zinc-300">
+                    {groupContacts.length} Linked Guardians in this circle
+                  </p>
+                </div>
+              </div>
+
               <div className="space-y-2">
                 {groupContacts.length === 0 ? (
                   <div className="text-center py-10 px-4 bg-white/60 dark:bg-zinc-900/40 border border-zinc-200/50 dark:border-zinc-800/50 rounded-[26px] space-y-2">
@@ -385,7 +483,6 @@ export function ContactsPage({
               </div>
             </div>
           ) : (
-            /* BENTO GRID OVERVIEW WITH TOP-RIGHT FLOATING BUBBLE (+) BUTTON */
             <div className="space-y-4">
               <div className="flex items-center justify-between px-1">
                 <div>
@@ -395,7 +492,6 @@ export function ContactsPage({
                   </p>
                 </div>
 
-                {/* Top Right Floating Plus Bubble Button */}
                 <button
                   onClick={() => setShowAddModal(true)}
                   className="w-11 h-11 rounded-full bg-yellow-400 text-black flex items-center justify-center active:scale-90 transition-all shadow-lg shadow-yellow-400/20 border-2 border-yellow-300"
@@ -405,37 +501,52 @@ export function ContactsPage({
                 </button>
               </div>
 
-              {/* Bento Grid Layout */}
+              {/* Bento Grid with Custom Group Background Images & Delete Buttons */}
               <div className="grid grid-cols-2 gap-3">
                 {allGroups.map((grp, idx) => {
-                  const IconComp = grp.icon;
                   const count = contacts.filter(
                     (c) => (c.group_category || "Emergency Circle") === grp.key
                   ).length;
 
-                  // First item takes wide span for bento aesthetic
                   const isWide = idx === 0;
 
                   return (
                     <div
                       key={grp.key}
                       onClick={() => setActiveGroupView(grp.key)}
-                      className={`p-4 rounded-[26px] bg-linear-to-br ${grp.accent} border backdrop-blur-xl relative overflow-hidden cursor-pointer active:scale-95 transition-all shadow-sm flex flex-col justify-between ${
-                        isWide ? "col-span-2 min-h-32" : "min-h-36"
+                      className={`p-4 rounded-[26px] bg-linear-to-br ${grp.accent} border backdrop-blur-xl relative overflow-hidden cursor-pointer active:scale-95 transition-all shadow-sm flex flex-col justify-between group ${
+                        isWide ? "col-span-2 min-h-36" : "min-h-40"
                       }`}
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="p-2.5 rounded-2xl bg-black/40 backdrop-blur-md">
-                          <IconComp className="w-5 h-5 text-yellow-400" />
-                        </div>
+                      {/* Background Image Overlay */}
+                      {grp.image && (
+                        <img
+                          src={grp.image}
+                          alt={grp.label}
+                          className="absolute inset-0 w-full h-full object-cover opacity-35 group-hover:scale-105 transition-transform duration-500 pointer-events-none"
+                        />
+                      )}
+                      <div className="absolute inset-0 bg-linear-to-t from-black via-black/40 to-transparent pointer-events-none" />
+
+                      <div className="relative z-10 flex items-center justify-between">
                         <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border ${grp.badgeBg}`}>
                           {count} Linked
                         </span>
+
+                        {!grp.isDefault && (
+                          <button
+                            onClick={(e) => handleDeleteCustomGroup(grp.key, e)}
+                            className="p-1.5 rounded-full bg-black/60 text-zinc-400 hover:text-red-400 hover:bg-black/80 active:scale-90 transition-all border border-zinc-700/60"
+                            title="Delete Custom Group"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
 
-                      <div className="pt-3">
-                        <h3 className="text-sm font-black text-black dark:text-white">{grp.label}</h3>
-                        <p className="text-[10px] text-zinc-500 dark:text-zinc-400 line-clamp-1">
+                      <div className="relative z-10 pt-4">
+                        <h3 className="text-sm font-black text-white">{grp.label}</h3>
+                        <p className="text-[10px] text-zinc-300 line-clamp-1 opacity-90">
                           {grp.desc}
                         </p>
                       </div>
@@ -467,7 +578,6 @@ export function ContactsPage({
                   </p>
                 </div>
 
-                {/* 3 Main Group Options + Add Group Option */}
                 <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">
                     Target Guardian Group
@@ -488,7 +598,6 @@ export function ContactsPage({
                       </button>
                     ))}
 
-                    {/* Add Custom Group Option Button */}
                     <button
                       type="button"
                       onClick={() => setShowCustomGroupField(!showCustomGroupField)}
@@ -500,27 +609,52 @@ export function ContactsPage({
                   </div>
                 </div>
 
-                {/* Custom Group Input Field */}
+                {/* Custom Group Creation with Uploadable Image */}
                 {showCustomGroupField && (
-                  <div className="flex items-center space-x-2 pt-1 animate-in fade-in">
+                  <div className="p-3 bg-black/60 border border-zinc-800 rounded-2xl space-y-2.5 animate-in fade-in">
+                    <input
+                      type="file"
+                      ref={groupImageInputRef}
+                      accept="image/*"
+                      onChange={handleGroupImageUpload}
+                      className="hidden"
+                    />
+
                     <input
                       type="text"
                       placeholder="New group name (e.g. Neighbors)"
                       value={customGroupInput}
                       onChange={(e) => setCustomGroupInput(e.target.value)}
-                      className="flex-1 bg-black border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-yellow-400"
+                      className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-yellow-400"
                     />
+
+                    <div className="flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => groupImageInputRef.current?.click()}
+                        className="inline-flex items-center space-x-1.5 text-[11px] font-extrabold text-yellow-400 bg-yellow-400/10 px-3 py-1.5 rounded-lg border border-yellow-400/20 hover:bg-yellow-400/20 active:scale-95 transition-all"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        <span>{customGroupImage ? "Change Image" : "Upload Card Image"}</span>
+                      </button>
+
+                      {customGroupImage && (
+                        <span className="text-[10px] text-emerald-400 font-extrabold">
+                          ✓ Image Attached
+                        </span>
+                      )}
+                    </div>
+
                     <button
                       type="button"
                       onClick={handleCreateCustomGroup}
-                      className="bg-yellow-400 text-black font-extrabold px-3 py-2 rounded-xl text-xs"
+                      className="w-full bg-yellow-400 text-black font-extrabold py-2 rounded-xl text-xs"
                     >
-                      Add
+                      Create Group
                     </button>
                   </div>
                 )}
 
-                {/* Import Phone Contacts or Manual Form */}
                 <div className="space-y-3 pt-2 border-t border-zinc-800">
                   <button
                     type="button"
@@ -616,7 +750,7 @@ export function ContactsPage({
                         <div className="w-11 h-11 rounded-full bg-zinc-900 text-yellow-400 font-black text-sm flex items-center justify-center uppercase border border-yellow-400">
                           {displayName.slice(0, 2)}
                         </div>
-                        <span className="w-3 h-3 bg-emerald-500 border-2 border-white dark:border-black rounded-full absolute bottom-0 right-0" />
+                        <span className="w-3 h-3 bg-emerald-500 border-2 border-white dark:border-black rounded-full absolute bottom-0 right-0 animate-ping" />
                       </div>
 
                       <div>
