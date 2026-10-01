@@ -33,6 +33,7 @@ interface HomePageProps {
   activeSession: ActiveSession | null;
   receivedSessions: ReceivedSession[];
   currentUserPhone: string;
+  onViewLiveFeed: (sessionId: string) => void;
   currentBanner: number;
   setCurrentBanner: (i: number) => void;
   banners: Array<{ id: number; tag: string; title: string; desc: string; bg: string }>;
@@ -47,6 +48,7 @@ export function HomePage({
   activeSession,
   receivedSessions,
   currentUserPhone,
+  onViewLiveFeed,
   currentBanner,
   setCurrentBanner,
   banners,
@@ -272,7 +274,7 @@ export function HomePage({
                   </div>
                 </div>
                 <button
-                  onClick={() => onNavigate("contacts")}
+                  onClick={() => onViewLiveFeed(session.id)}
                   className="w-full bg-yellow-400 hover:bg-yellow-300 text-black font-black py-2.5 rounded-xl text-[11px] transition-colors flex items-center justify-center space-x-2"
                 >
                   <span>View Live Feed</span>

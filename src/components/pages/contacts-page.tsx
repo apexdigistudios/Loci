@@ -107,6 +107,8 @@ interface CustomGroup {
 
 interface ContactsPageProps {
   userPhone: string;
+  openSessionId?: string | null;
+  onSessionOpened?: () => void;
   contacts: Contact[];
   addingContact: boolean;
   manualName: string;
@@ -150,6 +152,8 @@ const DEFAULT_GROUPS = [
 
 export function ContactsPage({
   userPhone,
+  openSessionId,
+  onSessionOpened,
   contacts,
   addingContact,
   manualName,
@@ -307,6 +311,15 @@ export function ContactsPage({
       supabase.removeChannel(channel);
     };
   }, [fetchSharedSessions]);
+
+  useEffect(() => {
+    if (!openSessionId) return;
+    setSubTab("shared");
+    const targetSession = sharedSessions.find((session) => session.id === openSessionId);
+    if (!targetSession) return;
+    setActiveDetailSession(targetSession);
+    onSessionOpened?.();
+  }, [openSessionId, onSessionOpened, sharedSessions]);
 
   const handleAutoPickContacts = async () => {
     setImportError(false);

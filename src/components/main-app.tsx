@@ -22,6 +22,8 @@ interface ActiveSession {
   expected_arrival_at: string;
   status: "active" | "completed" | "missed" | "escalated";
   notes?: string | null;
+  current_lat?: number | null;
+  current_lng?: number | null;
 }
 
 interface ReceivedSession {
@@ -78,11 +80,12 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const [addingContact, setAddingContact] = useState(false);
 
   const [locationCoords, setLocationCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [locationStatus, setLocationStatus] = useState<"idle" | "requesting" | "granted" | "denied">("idle");
+  const [locationStatus, setLocationStatus] = useState<"idle" | "requesting" | "granted" | "low-accuracy" | "denied">("idle");
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
 
   const [dataLoading, setDataLoading] = useState(true);
   const [currentBanner, setCurrentBanner] = useState(0);
+  const [requestedSharedSessionId, setRequestedSharedSessionId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const { theme, resolvedTheme } = useTheme();
   const notificationPermissionRequestRef = useRef<Promise<NotificationPermission> | null>(null);
@@ -127,17 +130,18 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       return;
     }
 
+    setLocationCoords(null);
     setLocationStatus("requesting");
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setLocationCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        setLocationStatus("granted");
+        setLocationStatus(pos.coords.accuracy > 500 ? "low-accuracy" : "granted");
       },
       (err) => {
         console.warn("Location permission error:", err);
         setLocationStatus("denied");
       },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 }
     );
   };
 
@@ -434,7 +438,10 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     );
   };
 
-  const handleStartSession = async (e: React.FormEvent) => {
+  const handleStartSession = async (
+    e: React.FormEvent,
+    coordinates?: { latitude: number; longitude: number }
+  ) => {
     e.preventDefault();
     const notificationPermission = await ensureNotificationPermission();
     const finalMins = Number(durationMinutes) || 30;
@@ -446,6 +453,8 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       destination: destName,
       expected_arrival_at: arrivalTime,
       status: "active",
+      current_lat: coordinates?.latitude ?? null,
+      current_lng: coordinates?.longitude ?? null,
     };
 
     setActiveSession(tempSession);
@@ -471,6 +480,8 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           expected_arrival_at: arrivalTime,
           status: "active",
           notes: notes.trim() || null,
+          current_lat: coordinates?.latitude ?? null,
+          current_lng: coordinates?.longitude ?? null,
         })
         .select()
         .single();
@@ -625,6 +636,10 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
                 activeSession={activeSession}
                 receivedSessions={receivedSessions}
                 currentUserPhone={userPhone}
+                onViewLiveFeed={(sessionId) => {
+                  setRequestedSharedSessionId(sessionId);
+                  setActiveTab("contacts");
+                }}
                 currentBanner={currentBanner}
                 setCurrentBanner={setCurrentBanner}
                 banners={BANNERS}
@@ -658,6 +673,8 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             {activeTab === "contacts" && (
               <ContactsPage
                 userPhone={userPhone}
+                openSessionId={requestedSharedSessionId}
+                onSessionOpened={() => setRequestedSharedSessionId(null)}
                 contacts={contacts}
                 addingContact={addingContact}
                 manualName={manualName}

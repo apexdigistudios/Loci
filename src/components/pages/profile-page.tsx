@@ -27,7 +27,7 @@ interface ProfilePageProps {
   avatarUrl?: string;
   onAvatarChange?: (url: string) => void;
   notificationPermission: NotificationPermission;
-  locationStatus: "idle" | "requesting" | "granted" | "denied";
+  locationStatus: "idle" | "requesting" | "granted" | "low-accuracy" | "denied";
   locationCoords: { lat: number; lng: number } | null;
   triggerNotificationPrompt: () => void;
   triggerLocationPrompt: () => void;
@@ -341,11 +341,18 @@ export function ProfilePage({
               <p className="text-[11px] text-zinc-400">Active route guardian tracking</p>
             </div>
 
-            {locationStatus === "granted" || locationCoords ? (
+            {locationStatus === "granted" ? (
               <span className="inline-flex items-center space-x-1 text-[10px] font-black bg-emerald-500/10 text-emerald-500 px-2.5 py-1 rounded-full">
                 <CheckCircle className="w-3 h-3" />
                 <span>ACTIVE</span>
               </span>
+            ) : locationStatus === "low-accuracy" ? (
+              <button
+                onClick={triggerLocationPrompt}
+                className="text-[10px] font-black text-amber-600 dark:text-amber-400 px-2.5 py-1 rounded-full bg-amber-500/10"
+              >
+                Enable high-accuracy GPS
+              </button>
             ) : locationStatus === "denied" ? (
               <div className="text-right">
                 <span className="inline-flex items-center space-x-1 text-[10px] font-black bg-red-500/10 text-red-500 px-2.5 py-1 rounded-full mb-1">
@@ -358,7 +365,7 @@ export function ProfilePage({
               locationStatus === "requesting" ? (
                 <span className="inline-flex items-center space-x-1.5 text-[10px] font-black text-yellow-500">
                   <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
-                  <span>Acquiring GPS Signal...</span>
+                  <span>Acquiring High-Precision GPS...</span>
                 </span>
               ) : (
                 <button

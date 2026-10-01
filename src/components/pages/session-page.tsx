@@ -37,6 +37,11 @@ interface ActiveSession {
   status: "active" | "completed" | "missed" | "escalated";
 }
 
+interface SessionCoordinates {
+  latitude: number;
+  longitude: number;
+}
+
 interface SessionPageProps {
   sessionHeadingSrc: string;
   activeSession: ActiveSession | null;
@@ -50,7 +55,7 @@ interface SessionPageProps {
   selectedContactIds: string[];
   toggleContactSelection: (id: string) => void;
   sessionLoading: boolean;
-  handleStartSession: (e: React.FormEvent) => void;
+  handleStartSession: (e: React.FormEvent, coordinates?: SessionCoordinates) => void;
   handleCompleteSession: () => void;
   onNavigate: (tab: "home" | "session" | "contacts" | "share" | "profile") => void;
 }
@@ -104,8 +109,10 @@ export function SessionPage({
   const [contactSelectionMode, setContactSelectionMode] = useState<"individual" | "groups">("individual");
 
   const [locationCoords, setLocationCoords] = useState<{ latitude: number; longitude: number } | null>(null);
-  const [locationStatus, setLocationStatus] = useState<"idle" | "requesting" | "granted" | "denied">("idle");
+  const [locationStatus, setLocationStatus] = useState<"idle" | "requesting" | "granted" | "low-accuracy" | "denied">("idle");
   const [locationUpdatedAt, setLocationUpdatedAt] = useState<Date | null>(null);
+  const [manuallyPickedLocation, setManuallyPickedLocation] = useState(false);
+  const manuallyPickedLocationRef = useRef(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -163,17 +170,22 @@ export function SessionPage({
       return;
     }
 
+    setLocationCoords(null);
+    setLocationUpdatedAt(null);
+    setManuallyPickedLocation(false);
+    manuallyPickedLocationRef.current = false;
     setLocationStatus("requesting");
     if (locationWatchIdRef.current !== null) {
       navigator.geolocation.clearWatch(locationWatchIdRef.current);
     }
     locationWatchIdRef.current = navigator.geolocation.watchPosition(
       ({ coords }) => {
+        if (manuallyPickedLocationRef.current) return;
         const latitude = coords.latitude;
         const longitude = coords.longitude;
         setLocationCoords({ latitude, longitude });
         setLocationUpdatedAt(new Date());
-        setLocationStatus("granted");
+        setLocationStatus(coords.accuracy > 500 ? "low-accuracy" : "granted");
 
         if (activeSession && !activeSession.id.startsWith("local-")) {
           void supabase
@@ -187,12 +199,35 @@ export function SessionPage({
         }
       },
       () => setLocationStatus("denied"),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 }
     );
   };
 
+  const handleLocationPicked = (coordinates: SessionCoordinates) => {
+    manuallyPickedLocationRef.current = true;
+    setManuallyPickedLocation(true);
+    setLocationCoords(coordinates);
+    setLocationUpdatedAt(new Date());
+    setLocationStatus("granted");
+    if (locationWatchIdRef.current !== null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(locationWatchIdRef.current);
+      locationWatchIdRef.current = null;
+    }
+
+    if (activeSession && !activeSession.id.startsWith("local-")) {
+      void supabase
+        .from("checkin_sessions")
+        .update({ current_lat: coordinates.latitude, current_lng: coordinates.longitude })
+        .eq("id", activeSession.id)
+        .eq("status", "active")
+        .then(({ error }) => {
+          if (error) console.error("Failed to update manually selected session location:", error);
+        });
+    }
+  };
+
   useEffect(() => {
-    if (!activeSession) return;
+    if (!activeSession || manuallyPickedLocationRef.current) return;
 
     requestCurrentLocation();
     return () => {
@@ -202,6 +237,13 @@ export function SessionPage({
       }
     };
   }, [activeSession]);
+
+  useEffect(() => () => {
+    if (locationWatchIdRef.current !== null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(locationWatchIdRef.current);
+      locationWatchIdRef.current = null;
+    }
+  }, []);
 
   // Dynamic Day Options for Return Picker
   const dayOptions = useMemo(() => {
@@ -582,8 +624,8 @@ export function SessionPage({
                           ? `${locationCoords.latitude.toFixed(5)}, ${locationCoords.longitude.toFixed(5)}`
                           : locationStatus === "denied"
                             ? "Location permission unavailable"
-                            : locationStatus === "requesting" || locationStatus === "idle"
-                              ? "Acquiring GPS Signal..."
+                              : locationStatus === "requesting" || locationStatus === "idle"
+                                ? "Acquiring High-Precision GPS..."
                               : "Waiting for GPS permission"}
                       </p>
                     </div>
@@ -593,9 +635,20 @@ export function SessionPage({
                     onClick={requestCurrentLocation}
                     className="shrink-0 text-[10px] font-extrabold text-black dark:text-white px-3 py-2 rounded-full bg-yellow-400 hover:bg-yellow-300 transition-colors"
                   >
-                    {locationStatus === "requesting" ? "Acquiring..." : locationStatus === "granted" ? "Refresh" : "Enable location"}
+                    {locationStatus === "low-accuracy"
+                      ? "Enable high accuracy"
+                      : locationStatus === "requesting"
+                        ? "Acquiring..."
+                        : locationStatus === "granted"
+                          ? "Refresh"
+                          : "Enable location"}
                   </button>
                 </div>
+                {locationStatus === "low-accuracy" && (
+                  <p className="px-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                    GPS accuracy is over 500 m. Enable precise or high-accuracy location in your device settings.
+                  </p>
+                )}
                 {locationUpdatedAt && (
                   <p className="text-[9px] text-zinc-400">
                     Updated {locationUpdatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · refreshes every 5 minutes
@@ -604,7 +657,13 @@ export function SessionPage({
               </div>
 
               {locationCoords && (
-                <SatelliteMap latitude={locationCoords.latitude} longitude={locationCoords.longitude} />
+                <SatelliteMap
+                  latitude={locationCoords.latitude}
+                  longitude={locationCoords.longitude}
+                  interactive
+                  manuallyPicked={manuallyPickedLocation}
+                  onLocationChange={handleLocationPicked}
+                />
               )}
             </div>
           </div>
@@ -712,7 +771,10 @@ export function SessionPage({
             />
           </div>
 
-          <form onSubmit={handleStartSession} className="space-y-6">
+          <form
+            onSubmit={(event) => handleStartSession(event, locationCoords || undefined)}
+            className="space-y-6"
+          >
             {/* Question 1: Destination */}
             <div className="space-y-2">
               <label className="block text-sm font-extrabold text-black dark:text-white px-1">
@@ -729,6 +791,43 @@ export function SessionPage({
                   className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-full pl-11 pr-5 py-3.5 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400 transition-all shadow-inner"
                 />
               </div>
+            </div>
+
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between px-1 gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-extrabold text-black dark:text-white">Pick your live location</p>
+                  <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">
+                    {locationCoords
+                      ? `${locationCoords.latitude.toFixed(5)}, ${locationCoords.longitude.toFixed(5)}`
+                      : "Enable GPS to place your starting pin"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={requestCurrentLocation}
+                  className="shrink-0 bg-yellow-400 text-black font-extrabold px-3 py-2 rounded-full text-[10px] active:scale-95 transition-all"
+                >
+                  {locationStatus === "requesting" ? "Acquiring GPS..." : "Use device GPS"}
+                </button>
+              </div>
+              {locationStatus === "requesting" && !locationCoords && (
+                <p className="px-1 text-[10px] font-semibold text-yellow-600 dark:text-yellow-400">Acquiring GPS signal...</p>
+              )}
+              {locationStatus === "low-accuracy" && (
+                <p className="px-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                  GPS accuracy is over 500 m. Enable precise location or set the pin manually.
+                </p>
+              )}
+              {locationCoords && (
+                <SatelliteMap
+                  latitude={locationCoords.latitude}
+                  longitude={locationCoords.longitude}
+                  interactive
+                  manuallyPicked={manuallyPickedLocation}
+                  onLocationChange={handleLocationPicked}
+                />
+              )}
             </div>
 
             {/* Requirement 1: Updated Question Label & Return Day/Time Picker Format */}
