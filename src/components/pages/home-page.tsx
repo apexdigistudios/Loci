@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { Plus, Shield, Sparkles, Clock, ChevronRight } from "lucide-react";
+import { cleanPhone } from "@/lib/utils";
 
 interface Contact {
   id: string;
@@ -57,7 +58,9 @@ export function HomePage({
   handleCompleteSession,
   onNavigate,
 }: HomePageProps) {
-  const circleSessions = receivedSessions.filter((session) => session.user_phone !== currentUserPhone);
+  const circleSessions = receivedSessions.filter(
+    (session) => cleanPhone(session.user_phone) !== cleanPhone(currentUserPhone)
+  );
   const [remainingSeconds, setRemainingSeconds] = useState(0);
 
   useEffect(() => {

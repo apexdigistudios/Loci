@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useTheme } from "next-themes";
 import {
   Download,
   Users,
@@ -46,6 +47,8 @@ const HOW_IT_WORKS_STEPS = [
 ];
 
 export default function Home() {
+  const { resolvedTheme } = useTheme();
+  const logoSrc = resolvedTheme === "dark" ? "/loci-dark.png" : "/loci-light.png";
   const [isPWA, setIsPWA] = useState(false);
   const [userPhone, setUserPhone] = useState<string | null>(null);
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -117,7 +120,7 @@ export default function Home() {
       <header className="sticky top-0 z-50 border-b border-zinc-200 dark:border-zinc-800/80 bg-white/80 dark:bg-black/80 backdrop-blur-md">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <img src="/logo.png" alt="Loci Logo" className="h-8 w-auto object-contain" />
+            <img src={logoSrc} alt="Loci Logo" className="h-8 w-auto object-contain" />
           </div>
 
           <div className="flex items-center space-x-3">
@@ -208,7 +211,7 @@ export default function Home() {
       </main>
 
       <footer className="border-t border-zinc-200 dark:border-zinc-900 py-8 flex flex-col items-center justify-center space-y-2 text-xs text-zinc-500">
-        <img src="/logo.png" alt="Loci" className="h-6 w-auto object-contain opacity-80" />
+        <img src={logoSrc} alt="Loci" className="h-6 w-auto object-contain opacity-80" />
         <p>Loci Safety Check-In &bull; Transparent, Consent-First &amp; Open</p>
       </footer>
     </div>

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { SatelliteMap } from "@/components/ui/satellite-map";
+import { cleanPhone } from "@/lib/utils";
 
 interface Contact {
   id: string;
@@ -131,8 +132,9 @@ export function SessionPage({
   const dispatchGuardianBroadcast = useCallback(async (event: string, details: Record<string, unknown>) => {
     if (!activeSession || activeSession.id.startsWith("local-")) return;
 
-    await Promise.all(sharedContacts.map((contact) => new Promise<void>((resolve) => {
-      const channel = supabase.channel(`guardian-alert-${encodeURIComponent(contact.phone)}`);
+    const recipientPhones = [...new Set(sharedContacts.map((contact) => cleanPhone(contact.phone)).filter(Boolean))];
+    await Promise.all(recipientPhones.map((recipientPhone) => new Promise<void>((resolve) => {
+      const channel = supabase.channel(`guardian-alert-${encodeURIComponent(recipientPhone)}`);
       let sent = false;
       let finished = false;
       const timeout = setTimeout(finish, 5000);
@@ -154,7 +156,7 @@ export function SessionPage({
             payload: {
               ...details,
               sessionId: activeSession.id,
-              recipientPhone: contact.phone,
+              recipientPhone,
             },
           }).then(finish, finish);
         } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {

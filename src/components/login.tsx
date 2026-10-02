@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { User, UserCheck, Phone, Mail, Lock, ArrowRight, Loader2, LogIn } from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import { User, UserCheck, Phone, Mail, Lock, ArrowRight, Loader2, LogIn, ImagePlus } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useTheme } from "next-themes";
 
 export interface UserData {
   fullName: string;
@@ -40,6 +41,12 @@ const COUNTRIES: CountryInfo[] = [
 
 export function Login({ onSuccess }: LoginProps) {
   const [isSignUp, setIsSignUp] = useState(false);
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState("");
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const onSuccessRef = useRef(onSuccess);
+  const { resolvedTheme } = useTheme();
+  const logoSrc = resolvedTheme === "dark" ? "/loci-dark.png" : "/loci-light.png";
 
   // Signup fields
   const [fullName, setFullName] = useState("");
@@ -53,26 +60,51 @@ export function Login({ onSuccess }: LoginProps) {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Auto Checker: Check returning session / stored phone on mount
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const savedUser = localStorage.getItem("loci_user_profile");
-      if (savedUser) {
-        try {
-          const parsed = JSON.parse(savedUser);
-          if (parsed.phone) {
-            onSuccess(parsed);
+    onSuccessRef.current = onSuccess;
+  }, [onSuccess]);
+
+  // Verify cached users against the profile table before opening the dashboard.
+  useEffect(() => {
+    let cancelled = false;
+    const savedUser = typeof window !== "undefined" ? localStorage.getItem("loci_user_profile") : null;
+    let cachedPhone = "";
+    if (savedUser) {
+      try {
+        cachedPhone = JSON.parse(savedUser).phone || "";
+      } catch {
+        localStorage.removeItem("loci_user_profile");
+      }
+    }
+    const savedPhone = typeof window !== "undefined" ? localStorage.getItem("loci_saved_phone") : null;
+    const phoneToVerify = cachedPhone || savedPhone || "";
+    if (phoneToVerify) {
+      setPhone(phoneToVerify);
+      void supabase
+        .from("users")
+        .select("full_name, nickname, phone")
+        .eq("phone", phoneToVerify)
+        .maybeSingle()
+        .then(({ data, error }) => {
+          if (cancelled) return;
+          if (error) {
+            console.error("Could not verify saved profile:", error);
+            setErrorMessage("Could not verify your profile. Enter your phone number to try again.");
             return;
           }
-        } catch (e) {
-          localStorage.removeItem("loci_user_profile");
-        }
-      }
-
-      const savedPhone = localStorage.getItem("loci_saved_phone");
-      if (savedPhone) {
-        setPhone(savedPhone);
-      }
+          if (data) {
+            onSuccessRef.current({
+              fullName: data.full_name || "",
+              nickname: data.nickname || "",
+              phone: data.phone,
+            });
+          } else {
+            localStorage.removeItem("loci_user_profile");
+            localStorage.removeItem("loci_saved_phone");
+            setPhone(phoneToVerify);
+            setIsSignUp(true);
+          }
+        });
     }
 
     try {
@@ -91,7 +123,10 @@ export function Login({ onSuccess }: LoginProps) {
     } catch {
       setDetectedCountry(COUNTRIES[0]);
     }
-  }, [onSuccess]);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -136,7 +171,9 @@ export function Login({ onSuccess }: LoginProps) {
       }
 
       if (!data) {
-        setErrorMessage("No account found with this phone number. Please create a profile.");
+        setPhone(formattedPhone);
+        setIsSignUp(true);
+        setErrorMessage("Create your profile to continue with this phone number.");
         return;
       }
 
@@ -174,6 +211,10 @@ export function Login({ onSuccess }: LoginProps) {
     }
 
     if (!trimmedFullName || !trimmedNickname || !trimmedEmail || !password || !formattedPhone) return;
+    if (!avatarFile) {
+      setErrorMessage("Upload a profile avatar to finish creating your profile.");
+      return;
+    }
 
     setLoading(true);
 
@@ -209,6 +250,32 @@ export function Login({ onSuccess }: LoginProps) {
       return;
     }
 
+    let avatarUrl: string;
+    try {
+      const bitmap = await createImageBitmap(avatarFile);
+      const canvas = document.createElement("canvas");
+      canvas.width = 300;
+      canvas.height = 300;
+      const context = canvas.getContext("2d");
+      context?.drawImage(bitmap, 0, 0, 300, 300);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
+      bitmap.close();
+      if (!blob) throw new Error("Avatar image could not be processed.");
+
+      const filePath = `${formattedPhone.replace(/[^a-zA-Z0-9]/g, "")}.jpg`;
+      const { error: uploadError } = await supabase.storage
+        .from("avatars")
+        .upload(filePath, blob, { upsert: true, contentType: "image/jpeg" });
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrlData } = supabase.storage.from("avatars").getPublicUrl(filePath);
+      avatarUrl = publicUrlData.publicUrl;
+    } catch (err) {
+      setLoading(false);
+      setErrorMessage(err instanceof Error ? err.message : "Avatar upload failed. Please try again.");
+      return;
+    }
+
     const { error: dbError } = await supabase.from("users").upsert(
       {
         id: authUser?.id,
@@ -216,6 +283,7 @@ export function Login({ onSuccess }: LoginProps) {
         nickname: trimmedNickname,
         email: trimmedEmail,
         phone: formattedPhone,
+        avatar_url: avatarUrl,
       },
       { onConflict: "phone" }
     );
@@ -245,7 +313,7 @@ export function Login({ onSuccess }: LoginProps) {
     <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between p-6 max-w-md mx-auto w-full select-none">
       {/* Brand Header */}
       <div className="pt-6">
-        <img src="/logo.png" alt="Loci Logo" className="h-10 w-auto object-contain mb-4" />
+        <img src={logoSrc} alt="Loci Logo" className="h-10 w-auto object-contain mb-4" />
         <h1 className="text-2xl font-extrabold tracking-tight text-black dark:text-white">
           {isSignUp ? "Create Your Loci Profile" : "Welcome Back"}
         </h1>
@@ -265,6 +333,34 @@ export function Login({ onSuccess }: LoginProps) {
               {errorMessage}
             </div>
           )}
+
+          <input
+            ref={avatarInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              setAvatarFile(file);
+              setAvatarPreview(URL.createObjectURL(file));
+              setErrorMessage(null);
+            }}
+          />
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => avatarInputRef.current?.click()}
+            className="w-full flex items-center gap-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 p-3 text-left"
+          >
+            <span className="w-12 h-12 shrink-0 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center">
+              {avatarPreview ? <img src={avatarPreview} alt="Avatar preview" className="h-full w-full object-cover" /> : <ImagePlus className="h-5 w-5 text-zinc-400" />}
+            </span>
+            <span className="min-w-0">
+              <span className="block text-xs font-extrabold text-black dark:text-white">Profile Avatar</span>
+              <span className="block text-[10px] text-zinc-500">{avatarFile ? avatarFile.name : "Choose an image to continue"}</span>
+            </span>
+          </button>
 
           <div>
             <label className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">

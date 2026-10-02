@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Home, Shield, Users, Share2, User } from "lucide-react";
 import { useTheme } from "next-themes";
 import { supabase } from "@/lib/supabase";
+import { cleanPhone } from "@/lib/utils";
 
 import { HomePage } from "@/components/pages/home-page";
 import { SessionPage } from "@/components/pages/session-page";
@@ -197,14 +198,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         setContacts([]);
       }
 
-      const { data: sessionData } = await supabase
+      const { data: activeSessionRows } = await supabase
         .from("checkin_sessions")
-        .select("id, destination, expected_arrival_at, status, notes")
-        .eq("user_phone", userPhone)
+        .select("id, user_phone, destination, expected_arrival_at, status, notes")
         .eq("status", "active")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .order("created_at", { ascending: false });
+      const sessionData = activeSessionRows?.find((session) =>
+        cleanPhone(session.user_phone) === cleanPhone(userPhone)
+      );
 
       if (sessionData) {
         setActiveSession(sessionData);
@@ -236,35 +237,48 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   }, [loadUserData]);
 
   const fetchReceivedSessions = useCallback(async () => {
-    const contactPhones = [...new Set(contacts.map((contact) => contact.phone).filter((phone) => phone !== userPhone))];
-    if (contactPhones.length === 0) {
-      setReceivedSessions([]);
-      return;
-    }
-
-    const { data: sessions, error } = await supabase
-      .from("checkin_sessions")
-      .select("id, user_phone, destination, expected_arrival_at, status")
-      .in("user_phone", contactPhones)
-      .neq("user_phone", userPhone)
-      .eq("status", "active")
-      .order("created_at", { ascending: false });
+    const contactPhones = new Set(contacts
+      .map((contact) => cleanPhone(contact.phone))
+      .filter((phone) => phone && phone !== cleanPhone(userPhone)));
+    const [{ data: sessions, error }, { data: recipients, error: recipientError }] = await Promise.all([
+      supabase
+        .from("checkin_sessions")
+        .select("id, user_phone, destination, expected_arrival_at, status")
+        .eq("status", "active")
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("session_recipients")
+        .select("session_id, recipient_phone, contact_phone"),
+    ]);
 
     if (error || !sessions) {
       console.error("Failed to load received sessions:", error);
       return;
     }
+    if (recipientError) console.error("Failed to load received session recipients:", recipientError);
 
-    const senderPhones = Array.from(new Set(sessions.map((session) => session.user_phone)));
+    const currentPhone = cleanPhone(userPhone);
+    const recipientSessionIds = new Set((recipients || [])
+      .filter((recipient) =>
+        cleanPhone(recipient.recipient_phone) === currentPhone ||
+        cleanPhone(recipient.contact_phone) === currentPhone
+      )
+      .map((recipient) => recipient.session_id));
+    const receivedSessions = sessions.filter((session) => {
+      const ownerPhone = cleanPhone(session.user_phone);
+      return ownerPhone !== currentPhone && (contactPhones.has(ownerPhone) || recipientSessionIds.has(session.id));
+    });
+
+    const senderPhones = Array.from(new Set(receivedSessions.map((session) => session.user_phone)));
     const { data: users } = await supabase
       .from("users")
       .select("phone, nickname, full_name, avatar_url")
       .in("phone", senderPhones);
 
     setReceivedSessions(
-      sessions.filter((session) => session.user_phone !== userPhone).map((session) => {
-        const contact = contacts.find((item) => item.phone === session.user_phone);
-        const user = users?.find((item) => item.phone === session.user_phone);
+      receivedSessions.map((session) => {
+        const contact = contacts.find((item) => cleanPhone(item.phone) === cleanPhone(session.user_phone));
+        const user = users?.find((item) => cleanPhone(item.phone) === cleanPhone(session.user_phone));
         return {
           ...session,
           friendName: user?.nickname || user?.full_name || contact?.name || "Circle Friend",
@@ -272,7 +286,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         };
       })
     );
-  }, [contacts]);
+  }, [contacts, userPhone]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -282,8 +296,8 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   }, [fetchReceivedSessions]);
 
   const broadcastOverdueToContacts = useCallback(async (sessionId: string, destination: string) => {
-    await Promise.all(contacts.map((contact) => new Promise<void>((resolve) => {
-      const recipientPhone = contact.phone;
+    const recipientPhones = [...new Set(contacts.map((contact) => cleanPhone(contact.phone)).filter(Boolean))];
+    await Promise.all(recipientPhones.map((recipientPhone) => new Promise<void>((resolve) => {
       const channel = supabase.channel(`guardian-alert-${encodeURIComponent(recipientPhone)}`);
       let sent = false;
       let finished = false;
@@ -319,7 +333,9 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
   // Global Realtime Sessions Listener
   useEffect(() => {
-    const contactPhones = contacts.map((contact) => contact.phone).filter((phone) => phone !== userPhone);
+    const contactPhones = new Set(contacts
+      .map((contact) => cleanPhone(contact.phone))
+      .filter((phone) => phone && phone !== cleanPhone(userPhone)));
 
     const channel = supabase
       .channel("global_realtime_sessions")
@@ -338,7 +354,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
           if (
             payload.eventType === "UPDATE" &&
-            newSession.user_phone === userPhone &&
+            cleanPhone(newSession.user_phone || "") === cleanPhone(userPhone) &&
             oldSession.status !== "escalated" &&
             newSession.status === "escalated" &&
             newSession.id
@@ -353,9 +369,9 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             void broadcastOverdueToContacts(newSession.id, newSession.destination || "your destination");
           }
 
-          if (changedSession.user_phone && contactPhones.includes(changedSession.user_phone)) {
+          if (changedSession.user_phone && contactPhones.has(cleanPhone(changedSession.user_phone))) {
             fetchReceivedSessions();
-            const friendName = contacts.find((c) => c.phone === changedSession.user_phone)?.name || "A friend in your circle";
+            const friendName = contacts.find((contact) => cleanPhone(contact.phone) === cleanPhone(changedSession.user_phone || ""))?.name || "A friend in your circle";
 
             if (payload.eventType === "INSERT" && newSession.status === "active" && canNotify) {
               new Notification("Loci Safety Alert", {
@@ -386,18 +402,18 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       .subscribe();
 
     const alertChannel = supabase
-      .channel(`guardian-alert-${encodeURIComponent(userPhone)}`)
+      .channel(`guardian-alert-${encodeURIComponent(cleanPhone(userPhone))}`)
       .on("broadcast", { event: "guardian_alert_due" }, async ({ payload }) => {
         const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : "";
         const recipientPhone = typeof payload?.recipientPhone === "string" ? payload.recipientPhone : "";
-        if (!sessionId || recipientPhone !== userPhone) return;
+        if (!sessionId || cleanPhone(recipientPhone) !== cleanPhone(userPhone)) return;
 
         const { data: session } = await supabase
           .from("checkin_sessions")
           .select("user_phone")
           .eq("id", sessionId)
           .maybeSingle();
-        const friendName = contacts.find((contact) => contact.phone === session?.user_phone)?.name || "A friend in your circle";
+        const friendName = contacts.find((contact) => cleanPhone(contact.phone) === cleanPhone(session?.user_phone || ""))?.name || "A friend in your circle";
 
         if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
           new Notification("🚨 SAFETY ALERT", {
