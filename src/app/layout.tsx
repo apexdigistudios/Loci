@@ -17,6 +17,12 @@ export const metadata: Metadata = {
   title: "Loci | Consent-Based Safety Check-In",
   description: "Share your journey safely with trusted contacts.",
   manifest: "/manifest.json",
+  verification: {
+    google: "GOOGLE_VERIFICATION_CODE_HERE",
+    other: {
+      "msvalidate.01": "BING_VERIFICATION_CODE_HERE",
+    },
+  },
 };
 
 export const viewport: Viewport = {

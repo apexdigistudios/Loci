@@ -8,8 +8,12 @@ create table if not exists public.users (
   nickname text,
   email text,
   avatar_url text,
+  pin_hash text,
   created_at timestamptz not null default now()
 );
+
+alter table public.users
+  add column if not exists pin_hash text;
 
 create table if not exists public.trusted_contacts (
   id uuid primary key default gen_random_uuid(),

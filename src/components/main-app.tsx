@@ -605,7 +605,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           </div>
 
           <div className="flex justify-center items-center">
-            <img src={logoSrc} alt="Loci Logo" className="h-7 w-auto object-contain" />
+            <img src={logoSrc} alt="Loci Logo" className="h-10 w-auto object-contain shrink-0" />
           </div>
 
           <div className="flex justify-end items-center">

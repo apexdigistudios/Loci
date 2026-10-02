@@ -45,11 +45,11 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
       {/* Page Title */}
       <div>
         <h2 className="text-base font-black text-black dark:text-white flex items-center space-x-1.5">
-          <span>Invite Guardians & Friends</span>
+          <span>Tell Your People About Déloci</span>
           <span>🚀</span>
         </h2>
         <p className="text-[11px] text-zinc-400">
-          Share your personal link so your squad can join Loci and protect each other.
+          Share your personal link to those you love,friends and families, so you can protect each other.
         </p>
       </div>
 

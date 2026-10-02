@@ -1,0 +1,23 @@
+# Déloci
+
+Déloci is a mobile-first personal safety PWA built for deloci.online. It gives users a simple way to set a check-in countdown before traveling, share their live location while moving, and maintain a trusted emergency circle that receives timely updates if a session is missed or escalates.
+
+## Product overview
+Déloci helps protect users during walks, commuting, and travel by pairing a countdown timer with consent-based location sharing and guardian alerts. Users can start a session, define a destination and expected arrival time, and ask trusted contacts to monitor progress without invasive background surveillance.
+
+## Technical capabilities
+- Start a session with destination, expected arrival, and optional notes
+- Track live GPS coordinates during an active check-in
+- Share real-time location updates with selected trusted contacts
+- Trigger contact alerts when a session reaches timeout or is marked overdue
+- Support emergency circle updates and delegation to trusted contacts
+- Focus on mobile-first PWA experience for fast installation and lightweight access
+
+## Privacy flow
+Déloci operates on explicit user consent. A session only begins when the user chooses to start it, location updates are shared only while the session is active, and trusted contacts receive alerts based on a user-defined emergency circle. The app does not continually track the user without active session participation.
+
+## Trusted contact dispatch
+When a journey is missed or an arrival reminder expires, Déloci can notify the user’s guardian network. Contacts receive relevant session information for awareness and support, helping maintain safer travel without unnecessary surveillance.
+
+## Operational purpose
+For deloci.online, Déloci is intended as a transparent, consent-first safety companion for personal movement and emergency check-in workflows.
