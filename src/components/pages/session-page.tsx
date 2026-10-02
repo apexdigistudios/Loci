@@ -21,6 +21,8 @@ import {
 import { supabase } from "@/lib/supabase";
 import { SatelliteMap } from "@/components/ui/satellite-map";
 import { cleanPhone } from "@/lib/utils";
+import { showLocalNotification } from "@/lib/notifications";
+import { triggerAlertFeedback } from "@/lib/alerts";
 
 interface Contact {
   id: string;
@@ -119,6 +121,12 @@ export function SessionPage({
   const streamRef = useRef<MediaStream | null>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const locationWatchIdRef = useRef<number | null>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const firedMilestonesRef = useRef<{
+    sessionId: string | null;
+    seconds: Set<number>;
+    previousRemaining: number | null;
+  }>({ sessionId: null, seconds: new Set(), previousRemaining: null });
 
   const sharedContacts = useMemo(
     () => contacts.filter((c) => selectedContactIds.includes(c.id)),
@@ -247,6 +255,33 @@ export function SessionPage({
     }
   }, []);
 
+  useEffect(() => {
+    if (!activeSession || !("wakeLock" in navigator)) return;
+
+    let disposed = false;
+    const acquireWakeLock = async () => {
+      if (disposed || document.visibilityState !== "visible") return;
+      try {
+        wakeLockRef.current = await navigator.wakeLock.request("screen");
+      } catch (error) {
+        console.warn("Screen Wake Lock unavailable:", error);
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && !wakeLockRef.current) void acquireWakeLock();
+    };
+
+    void acquireWakeLock();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      const lock = wakeLockRef.current;
+      wakeLockRef.current = null;
+      if (lock) void lock.release();
+    };
+  }, [activeSession?.id]);
+
   // Dynamic Day Options for Return Picker
   const dayOptions = useMemo(() => {
     const options = [];
@@ -286,18 +321,44 @@ export function SessionPage({
   useEffect(() => {
     if (!targetEndTime) return;
 
+    const currentSessionId = activeSession?.id || null;
+    if (firedMilestonesRef.current.sessionId !== currentSessionId) {
+      firedMilestonesRef.current = { sessionId: currentSessionId, seconds: new Set(), previousRemaining: null };
+    }
+
     const updateTimer = () => {
       const diffSecs = Math.floor((targetEndTime - Date.now()) / 1000);
       setRemainingSeconds(Math.max(0, diffSecs));
+
+      if (activeSession && diffSecs > 0) {
+        for (const milestone of [300, 60]) {
+          const previousRemaining = firedMilestonesRef.current.previousRemaining;
+          if (
+            previousRemaining !== null &&
+            previousRemaining > milestone &&
+            diffSecs <= milestone &&
+            !firedMilestonesRef.current.seconds.has(milestone)
+          ) {
+            firedMilestonesRef.current.seconds.add(milestone);
+            const minutesRemaining = milestone / 60;
+            void showLocalNotification(`⏰ ${minutesRemaining} minute${minutesRemaining === 1 ? "" : "s"} remaining`, {
+              body: `Your Déloci session is due in ${minutesRemaining} minute${minutesRemaining === 1 ? "" : "s"}.`,
+              icon: "/icon-192.png",
+              tag: `session-${activeSession.id}-remaining-${milestone}`,
+            });
+          }
+        }
+      }
+      firedMilestonesRef.current.previousRemaining = diffSecs;
 
       if (activeAlertConfig) {
         // Self Reminder Notification Trigger
         const selfReminderSecs = activeAlertConfig.selfMins * 60;
         if (diffSecs <= selfReminderSecs && diffSecs > 0 && !reminderNotificationFired) {
           if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-            new Notification("⏰ Déloci Check-In Reminder", {
+            void showLocalNotification("⏰ Déloci Check-In Reminder", {
               body: `Are you back safely? You have ${Math.ceil(diffSecs / 60)} minutes remaining to complete your session.`,
-              icon: "/loci-dark.png",
+              icon: "/icon-192.png",
             });
           }
           setReminderNotificationFired(true);
@@ -308,12 +369,13 @@ export function SessionPage({
         if (Date.now() >= guardianDueAt && !guardianNotificationFiredRef.current) {
           guardianNotificationFiredRef.current = true;
           if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-            new Notification("🚨 SAFETY ALERT", {
+            void showLocalNotification("🚨 SAFETY ALERT", {
               body: "🚨 SAFETY ALERT: Your session is overdue!",
-              icon: "/loci-dark.png",
+              icon: "/icon-192.png",
               tag: `overdue-session-${activeSession?.id || "active"}`,
             });
           }
+          triggerAlertFeedback();
           void dispatchGuardianBroadcast("guardian_alert_due", {
             destination: activeSession?.destination,
             expectedArrivalAt: new Date(targetEndTime).toISOString(),
@@ -327,7 +389,7 @@ export function SessionPage({
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [targetEndTime, activeAlertConfig, reminderNotificationFired, guardianNotificationFired, dispatchGuardianBroadcast, activeSession?.destination]);
+  }, [targetEndTime, activeAlertConfig, reminderNotificationFired, guardianNotificationFired, dispatchGuardianBroadcast, activeSession]);
 
   const formatTime = (totalSecs: number) => {
     const hrs = Math.floor(totalSecs / 3600);
@@ -473,7 +535,7 @@ export function SessionPage({
     <>
       {/* CAMERA OVERLAY */}
       {isCameraActive && (
-        <div className="fixed inset-0 z-[100] bg-black flex flex-col justify-between p-4 max-w-md mx-auto">
+        <div className="fixed inset-0 z-100 bg-black flex flex-col justify-between p-4 max-w-md mx-auto">
           <div className="flex items-center justify-between pt-[max(0.75rem,env(safe-area-inset-top))] z-10 px-2">
             <button
               type="button"
@@ -687,7 +749,7 @@ export function SessionPage({
 
           {/* Alert Configuration Modal */}
           {showAlertModal && (
-            <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
+            <div className="fixed inset-0 z-100 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
               <div className="bg-zinc-900 text-white border border-zinc-800 rounded-4xl p-6 w-full max-w-sm space-y-5 relative shadow-2xl">
                 <button
                   onClick={() => setShowAlertModal(false)}

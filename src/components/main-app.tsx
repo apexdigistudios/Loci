@@ -5,6 +5,8 @@ import { Home, Shield, Users, Share2, User } from "lucide-react";
 import { useTheme } from "next-themes";
 import { supabase } from "@/lib/supabase";
 import { cleanPhone } from "@/lib/utils";
+import { requestNotificationPermission, showLocalNotification, subscribeToPush, type NotificationPermissionResult } from "@/lib/notifications";
+import { prepareAlertFeedback, triggerAlertFeedback } from "@/lib/alerts";
 
 import { HomePage } from "@/components/pages/home-page";
 import { SessionPage } from "@/components/pages/session-page";
@@ -89,7 +91,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const [requestedSharedSessionId, setRequestedSharedSessionId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const { theme, resolvedTheme } = useTheme();
-  const notificationPermissionRequestRef = useRef<Promise<NotificationPermission> | null>(null);
+  const notificationPermissionRequestRef = useRef<Promise<NotificationPermissionResult> | null>(null);
 
   const ensureNotificationPermission = useCallback(async () => {
     if (typeof window === "undefined" || !("Notification" in window)) return null;
@@ -99,9 +101,9 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     }
     if (notificationPermissionRequestRef.current) return notificationPermissionRequestRef.current;
 
-    const permissionRequest = Notification.requestPermission()
+    const permissionRequest = requestNotificationPermission()
       .then((permission) => {
-        setNotificationPermission(permission);
+        if (permission !== "unsupported") setNotificationPermission(permission);
         return permission;
       })
       .catch((err: unknown) => {
@@ -119,6 +121,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     setMounted(true);
     void ensureNotificationPermission();
   }, [ensureNotificationPermission]);
+
+  useEffect(() => {
+    const sharedSessionId = new URLSearchParams(window.location.search).get("sharedSessionId");
+    if (!sharedSessionId) return;
+    setRequestedSharedSessionId(sharedSessionId);
+    setActiveTab("contacts");
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
 
   const triggerNotificationPrompt = async () => {
     await ensureNotificationPermission();
@@ -360,12 +370,13 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             newSession.id
           ) {
             if (canNotify) {
-              new Notification("🚨 SAFETY ALERT", {
+              void showLocalNotification("🚨 SAFETY ALERT", {
                 body: "🚨 SAFETY ALERT: Your session is overdue!",
                 icon: "/loci-dark.png",
                 tag: `overdue-session-${newSession.id}`,
               });
             }
+            triggerAlertFeedback();
             void broadcastOverdueToContacts(newSession.id, newSession.destination || "your destination");
           }
 
@@ -374,7 +385,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             const friendName = contacts.find((contact) => cleanPhone(contact.phone) === cleanPhone(changedSession.user_phone || ""))?.name || "A friend in your circle";
 
             if (payload.eventType === "INSERT" && newSession.status === "active" && canNotify) {
-              new Notification("Déloci Safety Alert", {
+              void showLocalNotification("Déloci Safety Alert", {
                 body: `🚨 ${friendName} started a live watch session heading to ${newSession.destination}.`,
                 icon: "/loci-dark.png",
                 tag: `session-start-${newSession.id}`,
@@ -382,19 +393,22 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             }
 
             if (payload.eventType === "UPDATE" && oldSession.status !== "completed" && newSession.status === "completed" && canNotify) {
-              new Notification("Déloci Session Completed", {
+              void showLocalNotification("Déloci Session Completed", {
                 body: `🛡️ ${friendName} completed their journey safely.`,
                 icon: "/loci-dark.png",
                 tag: `session-completed-${newSession.id}`,
               });
             }
 
-            if (payload.eventType === "UPDATE" && oldSession.status !== "escalated" && newSession.status === "escalated" && canNotify) {
-              new Notification("🚨 SAFETY ALERT", {
-                body: `🚨 SAFETY ALERT: ${friendName} has an overdue session!`,
-                icon: "/loci-dark.png",
-                tag: `overdue-session-${newSession.id}`,
-              });
+            if (payload.eventType === "UPDATE" && oldSession.status !== "escalated" && newSession.status === "escalated") {
+              if (canNotify) {
+                void showLocalNotification("🚨 SAFETY ALERT", {
+                  body: `🚨 SAFETY ALERT: ${friendName} has an overdue session!`,
+                  icon: "/icon-192.png",
+                  tag: `overdue-session-${newSession.id}`,
+                });
+              }
+              triggerAlertFeedback();
             }
           }
         }
@@ -416,12 +430,13 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         const friendName = contacts.find((contact) => cleanPhone(contact.phone) === cleanPhone(session?.user_phone || ""))?.name || "A friend in your circle";
 
         if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-          new Notification("🚨 SAFETY ALERT", {
+          void showLocalNotification("🚨 SAFETY ALERT", {
             body: `🚨 SAFETY ALERT: ${friendName} has an overdue session!`,
-            icon: "/loci-dark.png",
+            icon: "/icon-192.png",
             tag: `overdue-session-${sessionId}`,
           });
         }
+        triggerAlertFeedback();
       })
       .subscribe();
 
@@ -459,6 +474,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     coordinates?: { latitude: number; longitude: number }
   ) => {
     e.preventDefault();
+    void prepareAlertFeedback();
     const notificationPermission = await ensureNotificationPermission();
     const finalMins = Number(durationMinutes) || 30;
     const destName = destination.trim() || "Destination Check-In";
@@ -478,11 +494,12 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       localStorage.setItem("loci_active_session", JSON.stringify(tempSession));
     }
     if (notificationPermission === "granted") {
-      new Notification("Déloci Session Started", {
+      void showLocalNotification("Déloci Session Started", {
         body: `Your live watch session started heading to ${destName}.`,
         icon: "/loci-dark.png",
         tag: "active-loci-session",
       });
+      void subscribeToPush(userPhone);
     }
     setActiveTab("session");
     setSessionLoading(true);
@@ -525,7 +542,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     }
 
     if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-      new Notification("🛡️ Déloci Session Completed", {
+      void showLocalNotification("🛡️ Déloci Session Completed", {
         body: "Your active watch session was completed safely. Guardians notified.",
         icon: "/loci-dark.png",
       });
@@ -588,7 +605,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   };
 
   const isDark = mounted && (theme === "dark" || resolvedTheme === "dark");
-  const logoSrc = isDark ? "/loci-dark.png" : "/loci-light.png";
   const sessionHeadingSrc = isDark ? "/session-dark.png" : "/session-light.png";
 
   return (
@@ -605,7 +621,8 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           </div>
 
           <div className="flex justify-center items-center">
-              <img src={logoSrc} alt="Déloci Logo" className="h-10 w-auto object-contain shrink-0" />
+            <img src="/loci-light.png" alt="Déloci Logo" className="h-10 w-auto object-contain shrink-0 dark:hidden" />
+            <img src="/loci-dark.png" alt="Déloci Logo" className="hidden h-10 w-auto object-contain shrink-0 dark:block" />
           </div>
 
           <div className="flex justify-end items-center">

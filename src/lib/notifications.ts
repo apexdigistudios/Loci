@@ -1,0 +1,84 @@
+import { supabase } from "@/lib/supabase";
+
+export type NotificationPermissionResult = NotificationPermission | "unsupported";
+
+function decodeVapidKey(encodedKey: string) {
+  const padding = "=".repeat((4 - (encodedKey.length % 4)) % 4);
+  const base64 = (encodedKey + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
+}
+
+export async function requestNotificationPermission(): Promise<NotificationPermissionResult> {
+  if (typeof window === "undefined" || !("Notification" in window)) return "unsupported";
+  if (Notification.permission !== "default") return Notification.permission;
+
+  try {
+    return await Notification.requestPermission();
+  } catch (error) {
+    console.error("Notification permission request failed:", error);
+    return Notification.permission;
+  }
+}
+
+export async function subscribeToPush(userPhone: string) {
+  if (typeof window === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+    return { ok: false as const, reason: "unsupported" as const };
+  }
+
+  const permission = await requestNotificationPermission();
+  if (permission !== "granted") return { ok: false as const, reason: "permission-denied" as const };
+
+  const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  if (!vapidKey) return { ok: false as const, reason: "missing-vapid-key" as const };
+
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: decodeVapidKey(vapidKey),
+    });
+    const serialized = subscription.toJSON();
+    const p256dh = serialized.keys?.p256dh;
+    const auth = serialized.keys?.auth;
+    if (!subscription.endpoint || !p256dh || !auth) {
+      return { ok: false as const, reason: "invalid-subscription" as const };
+    }
+
+    const { error } = await supabase
+      .from("user_push_subscriptions")
+      .upsert({
+        user_phone: userPhone,
+        endpoint: subscription.endpoint,
+        p256dh,
+        auth,
+      }, { onConflict: "endpoint" });
+
+    if (error) {
+      console.error("Could not store push subscription:", error);
+      return { ok: false as const, reason: "storage-failed" as const };
+    }
+
+    return { ok: true as const, subscription };
+  } catch (error) {
+    console.error("Push subscription failed:", error);
+    return { ok: false as const, reason: "subscription-failed" as const };
+  }
+}
+
+export async function showLocalNotification(title: string, options: NotificationOptions = {}) {
+  if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") return false;
+
+  try {
+    if ("serviceWorker" in navigator) {
+      const registration = await navigator.serviceWorker.ready;
+      await registration.showNotification(title, options);
+    } else {
+      new Notification(title, options);
+    }
+    return true;
+  } catch (error) {
+    console.error("Could not display local notification:", error);
+    return false;
+  }
+}

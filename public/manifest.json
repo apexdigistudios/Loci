@@ -2,7 +2,7 @@
   "name": "Déloci",
   "short_name": "Déloci",
   "description": "Consent-First Safety Check-In PWA",
-  "start_url": "/",
+  "start_url": "/login",
   "scope": "/",
   "display": "standalone",
   "background_color": "#09090b",

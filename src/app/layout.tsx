@@ -18,8 +18,27 @@ export const metadata: Metadata = {
   title: "Déloci | Consent-Based Safety Check-In",
   description: "Share your journey safely with trusted contacts.",
   manifest: "/manifest.json",
+  icons: {
+    icon: "/icon-192.png",
+    shortcut: "/icon-192.png",
+    apple: "/apple-touch-icon.png",
+  },
+  openGraph: {
+    title: "Déloci — Consent-Based Safety Check-Ins",
+    description: "Keep the people you trust aware of where you are.",
+    url: "https://deloci.online",
+    siteName: "Déloci",
+    images: [
+      {
+        url: "https://deloci.online/icon-512.png",
+        width: 512,
+        height: 512,
+        alt: "Déloci Logo",
+      },
+    ],
+  },
   verification: {
-    google: "GOOGLE_VERIFICATION_CODE_HERE",
+    google: "YOUR_GOOGLE_SEARCH_CONSOLE_CODE_HERE",
     other: {
       "msvalidate.01": "BING_VERIFICATION_CODE_HERE",
     },
@@ -48,6 +67,18 @@ export default function RootLayout({
       <head>
         <link rel="manifest" href="/manifest.json" />
         <meta name="theme-color" content="#FACC15" />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "Organization",
+              name: "Déloci",
+              url: "https://deloci.online",
+              logo: "https://deloci.online/icon-512.png",
+            }),
+          }}
+        />
       </head>
       <body className="min-h-full flex flex-col bg-white dark:bg-[#0c0c0e] text-slate-900 dark:text-slate-100 transition-colors duration-200">
         <ThemeProvider attribute="class" defaultTheme="system" disableTransitionOnChange enableSystem>

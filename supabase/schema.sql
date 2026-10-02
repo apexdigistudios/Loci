@@ -47,6 +47,24 @@ create table if not exists public.session_recipients (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.user_push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_phone text not null references public.users(phone) on delete cascade,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.user_push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_phone text not null references public.users(phone) on delete cascade,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  created_at timestamptz not null default now()
+);
+
 -- Phone lookups, feed filters, recipient resolution, and session status queries.
 create index if not exists trusted_contacts_user_phone_idx
   on public.trusted_contacts(user_phone);
@@ -64,6 +82,10 @@ create index if not exists session_recipients_contact_phone_idx
   on public.session_recipients(contact_phone);
 create index if not exists session_recipients_recipient_phone_idx
   on public.session_recipients(recipient_phone);
+create index if not exists user_push_subscriptions_user_phone_idx
+  on public.user_push_subscriptions(user_phone);
+create index if not exists user_push_subscriptions_user_phone_idx
+  on public.user_push_subscriptions(user_phone);
 
 -- The unique constraint on public.users(phone) creates its phone lookup index.
 

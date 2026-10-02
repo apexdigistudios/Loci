@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { useTheme } from "next-themes";
 import {
   Download,
   Users,
@@ -17,6 +16,8 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { InstallModal } from "@/components/install-modal";
 import { Login, UserData } from "@/components/login";
 import { MainApp } from "@/components/main-app";
+import { ScrollReveal } from "@/components/scroll-reveal";
+import { SplashScreen } from "@/components/splash-screen";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -47,9 +48,8 @@ const HOW_IT_WORKS_STEPS = [
 ];
 
 export default function Home() {
-  const { resolvedTheme } = useTheme();
-  const logoSrc = resolvedTheme === "dark" ? "/loci-dark.png" : "/loci-light.png";
-  const [isPWA, setIsPWA] = useState(false);
+  const [isPWA, setIsPWA] = useState<boolean | null>(null);
+  const [splashComplete, setSplashComplete] = useState(false);
   const [userPhone, setUserPhone] = useState<string | null>(null);
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
@@ -60,13 +60,19 @@ export default function Home() {
       window.matchMedia("(display-mode: standalone)").matches ||
       (navigator as unknown as { standalone?: boolean }).standalone === true;
 
+    setIsPWA(isStandalone);
     if (isStandalone) {
-      setIsPWA(true);
-      // Retrieve persisted session phone if user previously logged in on this device
-      const savedPhone = localStorage.getItem("loci_user_phone");
-      if (savedPhone) {
-        setUserPhone(savedPhone);
-      }
+      const splashTimer = window.setTimeout(() => setSplashComplete(true), 1700);
+      // Capture install prompt while the standalone splash is visible.
+      const handleInstallWhileStarting = (event: Event) => {
+        event.preventDefault();
+        setDeferredPrompt(event as BeforeInstallPromptEvent);
+      };
+      window.addEventListener("beforeinstallprompt", handleInstallWhileStarting);
+      return () => {
+        window.clearTimeout(splashTimer);
+        window.removeEventListener("beforeinstallprompt", handleInstallWhileStarting);
+      };
     }
 
     // 2. Capture install prompt
@@ -78,6 +84,10 @@ export default function Home() {
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
     return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
   }, []);
+
+  if (isPWA === null || (isPWA && !splashComplete)) {
+    return isPWA ? <SplashScreen /> : null;
+  }
 
   const handleInstallClick = async () => {
     if (deferredPrompt) {
@@ -104,7 +114,7 @@ export default function Home() {
   // --- PWA STRICT ROUTING (Bypasses landing page entirely) ---
   if (isPWA) {
     if (!userPhone) {
-      return <Login onSuccess={handleLoginSuccess} />;
+      return <Login onSuccess={handleLoginSuccess} showSplash={false} />;
     }
     return <MainApp userPhone={userPhone} onLogout={handleLogout} />;
   }
@@ -120,7 +130,8 @@ export default function Home() {
       <header className="sticky top-0 z-50 border-b border-zinc-200 dark:border-zinc-800/80 bg-white/80 dark:bg-black/80 backdrop-blur-md">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <img src={logoSrc} alt="Déloci Logo" className="h-10 w-auto object-contain shrink-0" />
+            <img src="/loci-light.png" alt="Déloci Logo" className="h-10 w-auto object-contain shrink-0 dark:hidden" />
+            <img src="/loci-dark.png" alt="Déloci Logo" className="hidden h-10 w-auto object-contain shrink-0 dark:block" />
           </div>
 
           <div className="flex items-center space-x-3">
@@ -138,13 +149,18 @@ export default function Home() {
 
       <main className="flex-1 space-y-16 pb-20 overflow-hidden">
         <Hero />
-        <LifestyleGallery />
+        <ScrollReveal>
+          <LifestyleGallery />
+        </ScrollReveal>
 
+        <ScrollReveal>
         <section id="how-it-works" className="space-y-6 py-6">
           <div className="text-center max-w-xl mx-auto px-6 space-y-2">
-            <span className="text-[10px] font-black uppercase tracking-widest bg-yellow-400 text-black px-3.5 py-1.5 rounded-full shadow-sm">
-              How Déloci Works
-            </span>
+            <ScrollReveal delay={0.08}>
+              <span className="text-[10px] font-black uppercase tracking-widest bg-yellow-400 text-black px-3.5 py-1.5 rounded-full shadow-sm">
+                How Déloci Works
+              </span>
+            </ScrollReveal>
             <h2 className="text-2xl sm:text-4xl font-extrabold text-black dark:text-white tracking-tight">
               Consent-First Safety. Zero Spying.
             </h2>
@@ -159,21 +175,22 @@ export default function Home() {
 
             <div className="animate-marquee flex items-center space-x-6 py-4">
               {[...HOW_IT_WORKS_STEPS, ...HOW_IT_WORKS_STEPS].map((step, idx) => (
-                <div
-                  key={idx}
-                  className="w-70 sm:w-[320px] shrink-0 p-6 bg-zinc-50 dark:bg-zinc-900/80 border border-zinc-200 dark:border-zinc-800 rounded-3xl space-y-3 shadow-md hover:border-yellow-400 transition-colors"
-                >
+                <ScrollReveal key={idx} className="shrink-0" delay={(idx % HOW_IT_WORKS_STEPS.length) * 0.1}>
+                <div className="w-70 sm:w-[320px] p-6 bg-zinc-50 dark:bg-zinc-900/80 border border-zinc-200 dark:border-zinc-800 rounded-3xl space-y-3 shadow-md hover:border-yellow-400 transition-colors">
                   <div className="w-10 h-10 bg-yellow-400 rounded-2xl flex items-center justify-center shadow-sm">
                     {step.icon}
                   </div>
                   <h3 className="text-base font-extrabold text-black dark:text-white">{step.title}</h3>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">{step.desc}</p>
                 </div>
+                </ScrollReveal>
               ))}
             </div>
           </div>
         </section>
+        </ScrollReveal>
 
+        <ScrollReveal>
         <section id="install" className="max-w-6xl mx-auto px-6">
           <div className="bg-black text-white dark:bg-zinc-900 border border-zinc-800 rounded-3xl p-8 sm:p-12 flex flex-col md:flex-row items-center justify-between gap-8">
             <div className="space-y-4 max-w-lg">
@@ -208,12 +225,16 @@ export default function Home() {
             </button>
           </div>
         </section>
+        </ScrollReveal>
       </main>
 
+      <ScrollReveal>
       <footer className="border-t border-zinc-200 dark:border-zinc-900 py-8 flex flex-col items-center justify-center space-y-2 text-xs text-zinc-500">
-        <img src={logoSrc} alt="Déloci" className="h-8 w-auto object-contain shrink-0 opacity-80" />
+        <img src="/loci-light.png" alt="Déloci" className="h-8 w-auto object-contain shrink-0 opacity-80 dark:hidden" />
+        <img src="/loci-dark.png" alt="Déloci" className="hidden h-8 w-auto object-contain shrink-0 opacity-80 dark:block" />
         <p>Déloci Safety Check-In &bull; Transparent, Consent-First &amp; Open</p>
       </footer>
+      </ScrollReveal>
     </div>
   );
 }

@@ -3,8 +3,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { User, UserCheck, Phone, Lock, ArrowRight, Loader2, LogIn, ImagePlus, KeyRound, ChevronLeft, ShieldCheck } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { useTheme } from "next-themes";
 import { cleanPhone } from "@/lib/utils";
+import { SplashScreen } from "@/components/splash-screen";
 
 export interface UserData {
   fullName: string;
@@ -14,6 +14,7 @@ export interface UserData {
 
 interface LoginProps {
   onSuccess: (data: UserData) => void;
+  showSplash?: boolean;
 }
 
 interface CountryInfo {
@@ -40,7 +41,7 @@ const COUNTRIES: CountryInfo[] = [
   { code: "AE", country: "UAE", flag: "🇦🇪", prefix: "+971" },
 ];
 
-export function Login({ onSuccess }: LoginProps) {
+export function Login({ onSuccess, showSplash = true }: LoginProps) {
   const [isSignUp, setIsSignUp] = useState(false);
   const [authStep, setAuthStep] = useState<"phone" | "pin" | "legacy-pin">("phone");
   const [existingProfile, setExistingProfile] = useState<AuthProfile | null>(null);
@@ -48,8 +49,6 @@ export function Login({ onSuccess }: LoginProps) {
   const [avatarPreview, setAvatarPreview] = useState("");
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const onSuccessRef = useRef(onSuccess);
-  const { resolvedTheme } = useTheme();
-  const logoSrc = resolvedTheme === "dark" ? "/loci-dark.png" : "/loci-light.png";
 
   // Signup fields
   const [fullName, setFullName] = useState("");
@@ -63,10 +62,21 @@ export function Login({ onSuccess }: LoginProps) {
   const [detectedCountry, setDetectedCountry] = useState<CountryInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [profileCheckComplete, setProfileCheckComplete] = useState(false);
+  const [minimumSplashElapsed, setMinimumSplashElapsed] = useState(!showSplash);
 
   useEffect(() => {
     onSuccessRef.current = onSuccess;
   }, [onSuccess]);
+
+  useEffect(() => {
+    if (!showSplash) {
+      setMinimumSplashElapsed(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setMinimumSplashElapsed(true), 1500);
+    return () => window.clearTimeout(timer);
+  }, [showSplash]);
 
   // Verify cached users against the profile table before opening the dashboard.
   useEffect(() => {
@@ -82,13 +92,17 @@ export function Login({ onSuccess }: LoginProps) {
     }
     const savedPhone = typeof window !== "undefined" ? localStorage.getItem("loci_saved_phone") : null;
     const phoneToVerify = cachedPhone || savedPhone || "";
-    if (phoneToVerify) {
+    if (!phoneToVerify) {
+      setProfileCheckComplete(true);
+    } else {
       setPhone(phoneToVerify);
-      void supabase
-        .from("users")
-        .select("phone, full_name, nickname, avatar_url, pin_hash")
-        .ilike("phone", `%${cleanPhone(phoneToVerify)}`)
-        .limit(100)
+      void Promise.resolve(
+        supabase
+          .from("users")
+          .select("phone, full_name, nickname, avatar_url, pin_hash")
+          .ilike("phone", `%${cleanPhone(phoneToVerify)}`)
+          .limit(100)
+      )
         .then(({ data, error }) => {
           if (cancelled) return;
           if (error) {
@@ -110,6 +124,9 @@ export function Login({ onSuccess }: LoginProps) {
             setPhone(phoneToVerify);
             setIsSignUp(true);
           }
+        })
+        .finally(() => {
+          if (!cancelled) setProfileCheckComplete(true);
         });
     }
 
@@ -400,11 +417,16 @@ export function Login({ onSuccess }: LoginProps) {
     onSuccess(userData);
   };
 
+  if (showSplash && (!minimumSplashElapsed || !profileCheckComplete)) {
+    return <SplashScreen />;
+  }
+
   return (
     <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between p-6 max-w-md mx-auto w-full select-none">
       {/* Brand Header */}
       <div className="pt-6">
-        <img src={logoSrc} alt="Déloci Logo" className="h-12 w-auto object-contain shrink-0 mb-4" />
+        <img src="/loci-light.png" alt="Déloci Logo" className="h-12 w-auto object-contain shrink-0 mb-4 dark:hidden" />
+        <img src="/loci-dark.png" alt="Déloci Logo" className="hidden h-12 w-auto object-contain shrink-0 mb-4 dark:block" />
         <h1 className="text-2xl font-extrabold tracking-tight text-black dark:text-white">
           {isSignUp ? "Create Your Déloci Profile" : "Welcome Back"}
         </h1>
