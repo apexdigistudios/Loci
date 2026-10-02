@@ -2,8 +2,8 @@ import { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Loci - Safety Check-In',
-    short_name: 'Loci',
+    name: 'Déloci - Safety Check-In',
+    short_name: 'Déloci',
     description: 'Consent-based safety check-in application',
     start_url: '/',
     display: 'standalone',

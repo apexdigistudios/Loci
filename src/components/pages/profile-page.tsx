@@ -192,7 +192,7 @@ export function ProfilePage({
 
             <div>
               <h2 className="text-lg font-black text-black dark:text-white leading-tight">
-                {fullName || nickname || "Loci User"}
+                {fullName || nickname || "Déloci User"}
               </h2>
               <p className="text-xs font-mono font-semibold text-zinc-400 mt-0.5">
                 {userPhone}
@@ -238,7 +238,7 @@ export function ProfilePage({
             className="w-full bg-red-500/10 hover:bg-red-500/20 text-red-500 font-extrabold py-3.5 rounded-2xl text-xs flex items-center justify-center space-x-2 active:scale-95 transition-all border border-red-500/20"
           >
             <LogOut className="w-4 h-4" />
-            <span>Log Out of Loci</span>
+            <span>Log Out of Déloci</span>
           </button>
         </div>
       )}

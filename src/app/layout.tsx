@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "../components/theme-provider";
 import "./globals.css";
@@ -14,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Loci | Consent-Based Safety Check-In",
+  title: "Déloci | Consent-Based Safety Check-In",
   description: "Share your journey safely with trusted contacts.",
   manifest: "/manifest.json",
   verification: {
@@ -52,6 +53,15 @@ export default function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="system" disableTransitionOnChange enableSystem>
           {children}
         </ThemeProvider>
+        <Script src="https://www.googletagmanager.com/gtag/js?id=G-GCDQ3CV7MY" strategy="afterInteractive" />
+        <Script id="google-analytics" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+            gtag('config', 'G-GCDQ3CV7MY');
+          `}
+        </Script>
         <script
           dangerouslySetInnerHTML={{
             __html: `

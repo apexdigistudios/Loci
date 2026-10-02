@@ -8,14 +8,14 @@ export function LifestyleGallery() {
     <section className="max-w-6xl mx-auto px-4 sm:px-6 space-y-6 sm:space-y-10 py-4 sm:py-8 select-none">
       <div className="text-center max-w-2xl mx-auto space-y-2 sm:space-y-3">
         <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-widest bg-yellow-400 text-black px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded-full shadow-sm">
-          Loci In Real Life
+          Déloci In Real Life
         </span>
         <h2 className="text-2xl sm:text-5xl font-black text-black dark:text-white tracking-tight leading-tight">
           Same plans, different places. <br />
           <span className="text-yellow-500 dark:text-yellow-400">Still connected.</span>
         </h2>
         <p className="text-[11px] sm:text-sm text-zinc-600 dark:text-zinc-400">
-          Whether you’re commuting late, meeting someone new, or traveling in a group, Loci keeps your trusted circle informed without invasive spying.
+          Whether you’re commuting late, meeting someone new, or traveling in a group, Déloci keeps your trusted circle informed without invasive spying.
         </p>
       </div>
 
@@ -43,7 +43,7 @@ export function LifestyleGallery() {
                 <div className="w-4 h-4 sm:w-6 sm:h-6 rounded bg-yellow-400 text-black flex items-center justify-center font-bold text-[9px] sm:text-xs">
                   <Users className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5" />
                 </div>
-                <span className="text-[10px] sm:text-xs font-bold text-white">Group Loci</span>
+                <span className="text-[10px] sm:text-xs font-bold text-white">Group Déloci</span>
               </div>
               <span className="text-[8px] sm:text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800">
                 Active

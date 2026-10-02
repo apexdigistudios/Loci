@@ -51,7 +51,7 @@ export function Globe({ className, showBadge = true }: GlobeProps) {
         <div className="absolute -top-2 left-1/2 -translate-x-1/2 z-20 w-max max-w-62.5 transition-all duration-500 ease-out">
           <div className="bg-black/90 dark:bg-white/90 text-white dark:text-black border border-zinc-800 dark:border-zinc-200 px-3 py-1.5 rounded-full shadow-lg text-[11px] font-medium flex items-center space-x-2 backdrop-blur-md">
             <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse shrink-0" />
-            <span className="truncate">Loci safety network is active</span>
+            <span className="truncate">Déloci safety network is active</span>
           </div>
         </div>
       )}

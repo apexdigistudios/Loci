@@ -120,7 +120,7 @@ export default function Home() {
       <header className="sticky top-0 z-50 border-b border-zinc-200 dark:border-zinc-800/80 bg-white/80 dark:bg-black/80 backdrop-blur-md">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <img src={logoSrc} alt="Loci Logo" className="h-10 w-auto object-contain shrink-0" />
+            <img src={logoSrc} alt="Déloci Logo" className="h-10 w-auto object-contain shrink-0" />
           </div>
 
           <div className="flex items-center space-x-3">
@@ -143,7 +143,7 @@ export default function Home() {
         <section id="how-it-works" className="space-y-6 py-6">
           <div className="text-center max-w-xl mx-auto px-6 space-y-2">
             <span className="text-[10px] font-black uppercase tracking-widest bg-yellow-400 text-black px-3.5 py-1.5 rounded-full shadow-sm">
-              How Loci Works
+              How Déloci Works
             </span>
             <h2 className="text-2xl sm:text-4xl font-extrabold text-black dark:text-white tracking-tight">
               Consent-First Safety. Zero Spying.
@@ -181,7 +181,7 @@ export default function Home() {
                 Progressive Web App
               </span>
               <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-                Install Loci Directly on Your Phone or Computer
+                Install Déloci Directly on Your Phone or Computer
               </h2>
               <p className="text-xs sm:text-sm text-zinc-400 leading-relaxed">
                 No app store required. Install directly from your browser for native standalone access.
@@ -211,8 +211,8 @@ export default function Home() {
       </main>
 
       <footer className="border-t border-zinc-200 dark:border-zinc-900 py-8 flex flex-col items-center justify-center space-y-2 text-xs text-zinc-500">
-        <img src={logoSrc} alt="Loci" className="h-8 w-auto object-contain shrink-0 opacity-80" />
-        <p>Loci Safety Check-In &bull; Transparent, Consent-First &amp; Open</p>
+        <img src={logoSrc} alt="Déloci" className="h-8 w-auto object-contain shrink-0 opacity-80" />
+        <p>Déloci Safety Check-In &bull; Transparent, Consent-First &amp; Open</p>
       </footer>
     </div>
   );

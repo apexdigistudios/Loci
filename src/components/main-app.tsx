@@ -374,7 +374,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             const friendName = contacts.find((contact) => cleanPhone(contact.phone) === cleanPhone(changedSession.user_phone || ""))?.name || "A friend in your circle";
 
             if (payload.eventType === "INSERT" && newSession.status === "active" && canNotify) {
-              new Notification("Loci Safety Alert", {
+              new Notification("Déloci Safety Alert", {
                 body: `🚨 ${friendName} started a live watch session heading to ${newSession.destination}.`,
                 icon: "/loci-dark.png",
                 tag: `session-start-${newSession.id}`,
@@ -382,7 +382,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             }
 
             if (payload.eventType === "UPDATE" && oldSession.status !== "completed" && newSession.status === "completed" && canNotify) {
-              new Notification("Loci Session Completed", {
+              new Notification("Déloci Session Completed", {
                 body: `🛡️ ${friendName} completed their journey safely.`,
                 icon: "/loci-dark.png",
                 tag: `session-completed-${newSession.id}`,
@@ -436,14 +436,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
     const titleInterval = setInterval(() => {
       if (typeof document !== "undefined") {
-        document.title = "🛡️ Active Walk Session — Loci";
+        document.title = "🛡️ Active Walk Session — Déloci";
       }
     }, 2000);
 
     return () => {
       clearInterval(titleInterval);
       if (typeof document !== "undefined") {
-        document.title = "Loci — Personal Safety";
+        document.title = "Déloci — Personal Safety";
       }
     };
   }, [activeSession]);
@@ -478,7 +478,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       localStorage.setItem("loci_active_session", JSON.stringify(tempSession));
     }
     if (notificationPermission === "granted") {
-      new Notification("Loci Session Started", {
+      new Notification("Déloci Session Started", {
         body: `Your live watch session started heading to ${destName}.`,
         icon: "/loci-dark.png",
         tag: "active-loci-session",
@@ -525,7 +525,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     }
 
     if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-      new Notification("🛡️ Loci Session Completed", {
+      new Notification("🛡️ Déloci Session Completed", {
         body: "Your active watch session was completed safely. Guardians notified.",
         icon: "/loci-dark.png",
       });
@@ -605,7 +605,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           </div>
 
           <div className="flex justify-center items-center">
-            <img src={logoSrc} alt="Loci Logo" className="h-10 w-auto object-contain shrink-0" />
+              <img src={logoSrc} alt="Déloci Logo" className="h-10 w-auto object-contain shrink-0" />
           </div>
 
           <div className="flex justify-end items-center">

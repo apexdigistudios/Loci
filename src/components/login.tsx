@@ -404,9 +404,9 @@ export function Login({ onSuccess }: LoginProps) {
     <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between p-6 max-w-md mx-auto w-full select-none">
       {/* Brand Header */}
       <div className="pt-6">
-        <img src={logoSrc} alt="Loci Logo" className="h-12 w-auto object-contain shrink-0 mb-4" />
+        <img src={logoSrc} alt="Déloci Logo" className="h-12 w-auto object-contain shrink-0 mb-4" />
         <h1 className="text-2xl font-extrabold tracking-tight text-black dark:text-white">
-          {isSignUp ? "Create Your Loci Profile" : "Welcome Back"}
+          {isSignUp ? "Create Your Déloci Profile" : "Welcome Back"}
         </h1>
         <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1.5 leading-relaxed">
           {isSignUp
@@ -692,7 +692,7 @@ export function Login({ onSuccess }: LoginProps) {
             disabled={loading || loginPin.length !== 4}
             className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><LogIn className="w-4 h-4" /><span>Unlock Loci</span></>}
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><LogIn className="w-4 h-4" /><span>Unlock Déloci</span></>}
           </button>
           <button
             type="button"
@@ -785,7 +785,7 @@ export function Login({ onSuccess }: LoginProps) {
       )}
 
       <p className="text-[11px] text-zinc-400 dark:text-zinc-600 text-center pb-2 mt-2">
-        Loci safety check-ins require explicit consent. No continuous tracking.
+        Déloci safety check-ins require explicit consent. No continuous tracking.
       </p>
     </div>
   );

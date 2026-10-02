@@ -14,9 +14,9 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
   // Generate invite link based on user nickname or phone
   const shareUrl = typeof window !== "undefined"
     ? `${window.location.origin}/join?ref=${encodeURIComponent(nickname || userPhone)}`
-    : `https://loci.app/join?ref=${encodeURIComponent(nickname || userPhone)}`;
+    : `https://deloci.online/join?ref=${encodeURIComponent(nickname || userPhone)}`;
 
-  const shareText = `Hey! Join me on Loci so we can watch over each other when walking home safely. 🛡️🚀`;
+  const shareText = `Hey! Join me on Déloci so we can watch over each other when walking home safely. 🛡️🚀`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(shareUrl);
@@ -28,7 +28,7 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
     if (navigator.share) {
       try {
         await navigator.share({
-          title: "Join Loci Safety Network",
+          title: "Join Déloci Safety Network",
           text: shareText,
           url: shareUrl,
         });
@@ -68,7 +68,7 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
             Expand Your Safety Net 🛡️
           </h3>
           <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-            When your friends join Loci using your link, they are automatically added to your contact pool!
+            When your friends join Déloci using your link, they are automatically added to your contact pool!
           </p>
         </div>
 

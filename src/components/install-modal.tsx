@@ -35,7 +35,7 @@ export function InstallModal({ isOpen, onClose }: InstallModalProps) {
             </div>
             <div>
               <h3 className="text-base font-extrabold text-black dark:text-white leading-tight">
-                Install Loci
+                Install Déloci
               </h3>
               <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
                 {isIOS ? "iOS & Safari Instructions" : "Windows / Desktop Instructions"}
@@ -56,7 +56,7 @@ export function InstallModal({ isOpen, onClose }: InstallModalProps) {
             /* iOS Instructions */
             <>
               <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed font-medium">
-                To install Loci as a standalone app on your iPhone or iPad, follow these 3 steps in Safari:
+                To install Déloci as a standalone app on your iPhone or iPad, follow these 3 steps in Safari:
               </p>
 
               <div className="space-y-2.5 text-xs">
@@ -95,7 +95,7 @@ export function InstallModal({ isOpen, onClose }: InstallModalProps) {
             /* Windows / Desktop Chrome / Edge Instructions */
             <>
               <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed font-medium">
-                To install Loci on Windows (Chrome, Edge, or Brave):
+                To install Déloci on Windows (Chrome, Edge, or Brave):
               </p>
 
               <div className="space-y-2.5 text-xs">
@@ -106,7 +106,7 @@ export function InstallModal({ isOpen, onClose }: InstallModalProps) {
                       Look at Address Bar <Download className="w-3.5 h-3.5 text-yellow-500 inline" />
                     </p>
                     <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                      Click the small "Install Loci" icon on the far right of your browser URL bar.
+                      Click the small "Install Déloci" icon on the far right of your browser URL bar.
                     </p>
                   </div>
                 </div>
@@ -116,7 +116,7 @@ export function InstallModal({ isOpen, onClose }: InstallModalProps) {
                   <div className="space-y-0.5">
                     <p className="font-bold text-black dark:text-white">Or via Browser Menu</p>
                     <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                      Click <strong>&hellip; (Menu) &rarr; Cast, Save and Share &rarr; Install Loci...</strong>
+                      Click <strong>&hellip; (Menu) &rarr; Cast, Save and Share &rarr; Install Déloci...</strong>
                     </p>
                   </div>
                 </div>

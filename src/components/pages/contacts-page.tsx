@@ -367,7 +367,7 @@ export function ContactsPage({
                             </p>
                             {c.isLociUser && (
                               <span className="bg-yellow-400 text-black text-[9px] px-1.5 py-0.2 rounded-full font-black uppercase">
-                                Loci Member
+                                Déloci Member
                               </span>
                             )}
                           </div>

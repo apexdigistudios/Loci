@@ -1,6 +1,6 @@
 {
-  "name": "Loci",
-  "short_name": "Loci",
+  "name": "Déloci",
+  "short_name": "Déloci",
   "description": "Consent-First Safety Check-In PWA",
   "start_url": "/",
   "scope": "/",

@@ -295,7 +295,7 @@ export function SessionPage({
         const selfReminderSecs = activeAlertConfig.selfMins * 60;
         if (diffSecs <= selfReminderSecs && diffSecs > 0 && !reminderNotificationFired) {
           if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-            new Notification("⏰ Loci Check-In Reminder", {
+            new Notification("⏰ Déloci Check-In Reminder", {
               body: `Are you back safely? You have ${Math.ceil(diffSecs / 60)} minutes remaining to complete your session.`,
               icon: "/loci-dark.png",
             });
@@ -528,7 +528,7 @@ export function SessionPage({
               </button>
             </div>
 
-            {/* Location Icon & Shared Guardian Avatars with Loci Status Badges */}
+            {/* Location Icon & Shared Guardian Avatars with Déloci Status Badges */}
             <div className="flex flex-col items-center justify-center space-y-3 pt-1">
               <div className="p-3 bg-zinc-200/50 dark:bg-zinc-900/60 border border-zinc-300/40 dark:border-zinc-800/60 rounded-2xl shadow-sm">
                 <MapPin className="w-6 h-6 text-yellow-400" />
@@ -544,7 +544,7 @@ export function SessionPage({
                     <div
                       key={c.id}
                       className="flex flex-col items-center gap-1.5"
-                      title={`${c.name} (${c.isLociUser ? "Loci Guardian Active" : "SMS Alert Ready"})`}
+                      title={`${c.name} (${c.isLociUser ? "Déloci Guardian Active" : "SMS Alert Ready"})`}
                     >
                       <div className="relative w-10 h-10 rounded-full overflow-hidden bg-zinc-900 text-yellow-400 border-2 border-black font-black text-[11px] flex items-center justify-center uppercase shadow-md">
                         {c.avatar_url ? (
@@ -885,7 +885,7 @@ export function SessionPage({
               </div>
             </div>
 
-            {/* Requirement 3: Share Live Location With Guardians (With Loci Status Indicator) */}
+            {/* Requirement 3: Share Live Location With Guardians (With Déloci Status Indicator) */}
             <div className="space-y-2.5">
               <div className="flex items-center justify-between px-1">
                 <label className="block text-sm font-extrabold text-black dark:text-white">
@@ -983,7 +983,7 @@ export function SessionPage({
                         <span>{c.name}</span>
                         {c.isLociUser && (
                           <span className="bg-yellow-400 text-black text-[9px] px-1.5 py-0.2 rounded-full font-black uppercase">
-                            Loci
+                            Déloci
                           </span>
                         )}
                       </button>
