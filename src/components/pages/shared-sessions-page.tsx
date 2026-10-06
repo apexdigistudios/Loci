@@ -385,35 +385,34 @@ export function SharedSessionsPage({
               {!isSender && <p className="text-[10px] font-mono text-zinc-400">{activeDetailSession.user_phone}</p>}
             </div>
           </div>
-
         </div>
 
         {/* Destination & ETA Info Card */}
-        <div className="bg-yellow-400 text-black rounded-2xl p-3.5 space-y-2.5 shadow-md">
+        <div className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 rounded-2xl p-3.5 space-y-2.5 shadow-xs">
           <div className="flex items-center justify-between">
-            <span className="inline-flex items-center space-x-1 text-[8px] font-black uppercase bg-black text-yellow-400 px-2 py-0.5 rounded-full">
+            <span className="inline-flex items-center space-x-1 text-[8px] font-black uppercase bg-yellow-400/10 text-yellow-500 dark:text-yellow-400 border border-yellow-400/20 px-2 py-0.5 rounded-full">
               <Sparkles className="w-3 h-3 text-yellow-400" />
               <span>Target Location</span>
             </span>
-            <Clock className="w-4 h-4 text-black" />
+            <Clock className="w-4 h-4 text-zinc-400" />
           </div>
 
           <div>
-            <p className="text-[8px] font-black uppercase text-black/60 tracking-wider">Heading To</p>
-            <h4 className="text-lg font-black leading-tight mt-0.5">{activeDetailSession.destination}</h4>
+            <p className="text-[9px] font-black uppercase text-zinc-400 tracking-wider">Heading To</p>
+            <h4 className="text-base font-black text-black dark:text-white leading-tight mt-0.5">{activeDetailSession.destination}</h4>
           </div>
 
-          <div className="bg-black/10 p-2.5 rounded-xl flex items-center justify-between border border-black/10">
+          <div className="bg-zinc-100 dark:bg-zinc-800/50 p-2.5 rounded-xl flex items-center justify-between border border-zinc-200/50 dark:border-zinc-800/50">
             <div>
-              <p className="text-[8px] font-bold uppercase text-black/70">Expected Arrival Time</p>
-              <p className="text-xs font-black font-mono">
+              <p className="text-[9px] font-black uppercase text-zinc-400">Expected Arrival Time</p>
+              <p className="text-xs font-black font-mono text-black dark:text-white">
                 {new Date(activeDetailSession.expected_arrival_at).toLocaleTimeString([], {
                   hour: "2-digit",
                   minute: "2-digit",
                 })}
               </p>
             </div>
-            <ShieldAlert className="w-4 h-4 text-black" />
+            <ShieldAlert className="w-4 h-4 text-yellow-400" />
           </div>
         </div>
 

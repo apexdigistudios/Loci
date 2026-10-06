@@ -1,74 +1,136 @@
 import { supabase } from "@/lib/supabase";
 
-function decodeVapidKey(encodedKey: string) {
-  const padding = "=".repeat((4 - (encodedKey.length % 4)) % 4);
-  const base64 = (encodedKey + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const raw = window.atob(base64);
-  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    console.warn("Push messaging is not supported in this browser.");
+    return null;
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    return registration;
+  } catch (error) {
+    console.error("Service Worker registration failed:", error);
+    return null;
+  }
 }
 
 export async function subscribeUserToPush(userId: string) {
-  if (typeof window === "undefined" || !("Notification" in window)) {
-    return { ok: false as const, reason: "unsupported" as const };
-  }
+  const registration = await registerServiceWorker();
+  if (!registration) return { ok: false, reason: "Service Workers unsupported" };
 
-  let permission: NotificationPermission;
-  try {
-    permission = Notification.permission === "default"
-      ? await Notification.requestPermission()
-      : Notification.permission;
-  } catch (error) {
-    console.error("Could not request notification permission:", error);
-    return { ok: false as const, reason: "permission-request-failed" as const };
+  const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  if (!vapidPublicKey) {
+    console.error("NEXT_PUBLIC_VAPID_PUBLIC_KEY is missing.");
+    return { ok: false, reason: "Missing NEXT_PUBLIC_VAPID_PUBLIC_KEY" };
   }
-  if (permission !== "granted") return { ok: false as const, reason: "permission-denied" as const };
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-    return { ok: false as const, reason: "unsupported" as const };
-  }
-
-  const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-  if (!vapidKey) return { ok: false as const, reason: "missing-vapid-key" as const };
 
   try {
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("phone")
-      .eq("id", userId)
-      .maybeSingle();
-    if (userError || !user) {
-      console.error("Could not find the user for push registration:", userError);
-      return { ok: false as const, reason: "user-not-found" as const };
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      return { ok: false, reason: "Permission denied by browser" };
     }
 
-    const registration = await navigator.serviceWorker.ready;
-    const subscription = await registration.pushManager.getSubscription() || await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: decodeVapidKey(vapidKey),
-    });
-    const serialized = subscription.toJSON();
-    const p256dh = serialized.keys?.p256dh;
-    const auth = serialized.keys?.auth;
-    if (!subscription.endpoint || !p256dh || !auth) {
-      return { ok: false as const, reason: "invalid-subscription" as const };
+    let subscription = await registration.pushManager.getSubscription();
+
+    if (!subscription) {
+      const convertedKey = urlBase64ToUint8Array(vapidPublicKey);
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: convertedKey as unknown as BufferSource,
+      });
     }
 
-    const { error } = await supabase
-      .from("user_push_subscriptions")
-      .upsert({
+    const subJson = subscription.toJSON();
+    const endpoint = subJson.endpoint;
+    const p256dh = subJson.keys?.p256dh;
+    const auth = subJson.keys?.auth;
+
+    if (!endpoint || !p256dh || !auth) {
+      return { ok: false, reason: "Invalid browser subscription keys" };
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    const response = await fetch(`${supabaseUrl}/functions/v1/send-push`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${anonKey}`,
+      },
+      body: JSON.stringify({
+        action: "subscribe",
         user_id: userId,
-        user_phone: user.phone,
-        endpoint: subscription.endpoint,
+        endpoint,
         p256dh,
         auth,
-      }, { onConflict: "endpoint" });
+        device_info: { userAgent: navigator.userAgent },
+      }),
+    });
 
-    if (error) {
-      console.error("Could not store push subscription:", error);
-      return { ok: false as const, reason: "storage-failed" as const };
+    const resData = await response.json().catch(() => ({}));
+
+    if (!response.ok || resData.error) {
+      console.error("Edge function subscribe error:", resData);
+      return { ok: false, reason: resData.error || `HTTP ${response.status}` };
     }
-    return { ok: true as const, subscription };
-  } catch (error) {
+
+    return { ok: true, subscription };
+  } catch (error: any) {
     console.error("Push subscription failed:", error);
-    return { ok: false as const, reason: "subscription-failed" as const };
+    return { ok: false, reason: error?.message || "Subscription error" };
   }
 }
+
+export async function sendTestPushNotification(userId: string) {
+  // 1. Ensure user is subscribed first
+  const subResult = await subscribeUserToPush(userId);
+  if (!subResult.ok) {
+    return subResult;
+  }
+
+  // 2. Dispatch the test push
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/send-push`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${anonKey}`,
+      },
+      body: JSON.stringify({
+        action: "test",
+        user_id: userId,
+        title: "Déloci Test Notification 🔔",
+        body: "Web Push pipeline is active and working!",
+      }),
+    });
+
+    const resData = await response.json().catch(() => ({}));
+
+    if (!response.ok || resData.error) {
+      console.error("Test push dispatch error:", resData);
+      return { ok: false, reason: resData.error || `HTTP ${response.status}` };
+    }
+
+    return { ok: true, data: resData };
+  } catch (error: any) {
+    return { ok: false, reason: error?.message || "Network request failed" };
+  }
+}
+
+export const sendPushTestNotification = sendTestPushNotification;

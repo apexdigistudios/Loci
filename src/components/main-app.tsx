@@ -6,7 +6,7 @@ import { useTheme } from "next-themes";
 import { supabase } from "@/lib/supabase";
 import { cleanPhone } from "@/lib/utils";
 import { requestNotificationPermission, type NotificationPermissionResult } from "@/lib/notifications";
-import { subscribeUserToPush } from "@/lib/push-notifications";
+import { sendPushTestNotification, subscribeUserToPush } from "@/lib/push-notifications";
 import { prepareAlertFeedback } from "@/lib/alerts";
 
 import { HomePage } from "@/components/pages/home-page";
@@ -144,6 +144,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
   const triggerNotificationPrompt = async () => {
     await ensureNotificationPermission();
+  };
+
+  const handleTestPush = async () => {
+    if (!userId) return "User profile is still loading.";
+    const result = await sendPushTestNotification(userId);
+    return result.ok
+      ? `Test push accepted by ${result.data?.delivered ?? 0} device subscription(s).`
+      : `Test push failed: ${result.reason}.`;
   };
 
   const triggerLocationPrompt = () => {
@@ -669,6 +677,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
               <ProfilePage
                 fullName={fullName}
                 nickname={nickname}
+                userId={userId}
                 userPhone={userPhone}
                 avatarUrl={avatarUrl}
                 onAvatarChange={(url) => setAvatarUrl(url)}
@@ -677,6 +686,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
                 locationCoords={locationCoords}
                 triggerNotificationPrompt={triggerNotificationPrompt}
                 triggerLocationPrompt={triggerLocationPrompt}
+                onTestPush={handleTestPush}
                 onLogout={onLogout}
               />
             )}

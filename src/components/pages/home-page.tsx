@@ -175,24 +175,24 @@ export function HomePage({
 
       {/* Walk Home Entry Card */}
       {activeSession ? (
-        <div className="bg-yellow-400 text-black rounded-[26px] p-5 shadow-lg space-y-3 relative overflow-hidden">
+        <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-2xl border border-zinc-200/50 dark:border-zinc-800/50 rounded-[26px] p-5 shadow-sm space-y-3 relative overflow-hidden">
           <div className="flex items-center justify-between">
-            <span className="inline-flex items-center space-x-1 text-[9px] font-black uppercase tracking-wider bg-black text-yellow-400 px-2.5 py-1 rounded-full">
+            <span className="inline-flex items-center space-x-1 text-[9px] font-black uppercase tracking-wider bg-yellow-400/10 text-yellow-500 dark:text-yellow-400 border border-yellow-400/20 px-2.5 py-1 rounded-full">
               <Sparkles className="w-3 h-3 text-yellow-400" />
               <span>Active Session</span>
             </span>
-            <Clock className="w-4 h-4 text-black" />
+            <Clock className="w-4 h-4 text-zinc-400" />
           </div>
 
           <div>
-            <p className="text-[9px] font-black uppercase text-black/60 tracking-wider">Destination</p>
-            <h2 className="text-xl font-black tracking-tight leading-tight">{activeSession.destination}</h2>
+            <p className="text-[9px] font-black uppercase text-zinc-400 tracking-wider">Destination</p>
+            <h2 className="text-xl font-black text-black dark:text-white tracking-tight leading-tight">{activeSession.destination}</h2>
           </div>
 
-          <div className="bg-black/10 backdrop-blur-md p-3 rounded-2xl flex items-center justify-between">
+          <div className="bg-zinc-100 dark:bg-zinc-800/50 p-3 rounded-2xl flex items-center justify-between border border-zinc-200/50 dark:border-zinc-800/50">
             <div>
-              <p className="text-[9px] font-bold uppercase text-black/70">Expected Arrival</p>
-              <p className="text-sm font-black font-mono">
+              <p className="text-[9px] font-bold uppercase text-zinc-400">Expected Arrival</p>
+              <p className="text-sm font-black font-mono text-black dark:text-white">
                 {new Date(activeSession.expected_arrival_at).toLocaleTimeString([], {
                   hour: "2-digit",
                   minute: "2-digit",
@@ -200,17 +200,17 @@ export function HomePage({
               </p>
             </div>
             <div className="text-right">
-              <p className="text-[9px] font-bold uppercase text-black/70">Remaining</p>
-              <p className="text-sm font-black font-mono">
+              <p className="text-[9px] font-bold uppercase text-zinc-400">Remaining</p>
+              <p className="text-sm font-black font-mono text-black dark:text-white">
                 {remainingSeconds > 0 ? formatCountdown(remainingSeconds) : "Overdue"}
               </p>
             </div>
           </div>
 
           {activeSession.notes && (
-            <div className="bg-black/10 p-3 rounded-2xl">
-              <p className="text-[9px] font-bold uppercase text-black/70">Notes</p>
-              <p className="text-xs font-semibold mt-1">{activeSession.notes}</p>
+            <div className="bg-zinc-100 dark:bg-zinc-800/50 p-3 rounded-2xl border border-zinc-200/50 dark:border-zinc-800/50">
+              <p className="text-[9px] font-bold uppercase text-zinc-400">Notes</p>
+              <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-200 mt-1">{activeSession.notes}</p>
             </div>
           )}
 
@@ -219,7 +219,7 @@ export function HomePage({
               <button
                 type="button"
                 onClick={handleSafeCheckin}
-                className="w-full bg-white text-black border-2 border-black font-black py-4 rounded-2xl text-sm shadow-lg active:scale-[0.97]"
+                className="w-full bg-yellow-400 hover:bg-yellow-300 text-black font-black py-4 rounded-2xl text-sm shadow-md active:scale-[0.97] transition-all"
               >
                 Confirm I’m Safe
               </button>
@@ -227,7 +227,7 @@ export function HomePage({
 
           <button
             onClick={handleCompleteSession}
-            className="w-full bg-black hover:bg-zinc-900 text-white font-black py-3.5 rounded-2xl text-xs transition-all flex items-center justify-center space-x-2 active:scale-[0.97]"
+            className="w-full bg-black dark:bg-white text-white dark:text-black font-black py-3.5 rounded-2xl text-xs transition-all flex items-center justify-center space-x-2 active:scale-[0.97]"
           >
             <span>I Arrived Safely! 🎉</span>
           </button>

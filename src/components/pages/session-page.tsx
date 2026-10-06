@@ -22,6 +22,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { SatelliteMap } from "@/components/ui/satellite-map";
 import { subscribeUserToPush } from "@/lib/push-notifications";
+import { triggerAlertFeedback, sendPushAlert } from "@/lib/alerts";
 
 interface Contact {
   id: string;
@@ -30,6 +31,7 @@ interface Contact {
   isLociUser?: boolean;
   avatar_url?: string;
   group_category?: string;
+  contact_user_id?: string;
 }
 
 interface ActiveSession {
@@ -92,11 +94,6 @@ export function SessionPage({
   handleSafeCheckin,
   onNavigate,
 }: SessionPageProps) {
-  // 4-Step Setup Wizard
-  // Step 1: Destination & GPS Pin
-  // Step 2: Return Time & Day Schedule
-  // Step 3: Self Check-In & Guardian Alert Intervals
-  // Step 4: Guardian/Circle Selection & Optional Selfie/Notes
   const [currentStep, setCurrentStep] = useState<number>(1);
 
   const [attachedMedia, setAttachedMedia] = useState<{
@@ -126,6 +123,10 @@ export function SessionPage({
   const [manuallyPickedLocation, setManuallyPickedLocation] = useState(false);
   const manuallyPickedLocationRef = useRef(false);
 
+  const lastCheckinPushRef = useRef<number>(0);
+  const lastExpiryPushRef = useRef<boolean>(false);
+  const lastGuardianOverduePushRef = useRef<boolean>(false);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
@@ -136,6 +137,12 @@ export function SessionPage({
     () => contacts.filter((c) => selectedContactIds.includes(c.id)),
     [contacts, selectedContactIds]
   );
+
+  const guardianUserIds = useMemo(
+    () => sharedContacts.map((c) => c.contact_user_id || c.id),
+    [sharedContacts]
+  );
+
   const contactGroups = useMemo(
     () => Array.from(new Set(contacts.map((contact) => contact.group_category).filter((group): group is string => !!group))),
     [contacts]
@@ -295,6 +302,82 @@ export function SessionPage({
     return () => clearInterval(interval);
   }, [targetEndTime]);
 
+  const isSafetyCheckinDue = !!activeSession && clockNow - new Date(
+    activeSession.last_user_checkin_at || activeSession.expected_arrival_at
+  ).getTime() >= (activeSession.user_reminder_mins || 15) * 60000;
+
+  // Dispatch push alerts for active session check-ins, arrival expiry & guardian overdue escalation
+  useEffect(() => {
+    if (!activeSession || !userId) return;
+
+    const now = Date.now();
+
+    // 1. User check-in reminder interval
+    if (isSafetyCheckinDue) {
+      if (now - lastCheckinPushRef.current > 120000) {
+        lastCheckinPushRef.current = now;
+        triggerAlertFeedback();
+        void sendPushAlert(
+          userId,
+          "Safety Check-in Required ⏱️",
+          `Please confirm you are safe on your trip to ${activeSession.destination || "your destination"}.`
+        );
+      }
+    }
+
+    // 2. Arrival time reached
+    if (targetEndTime && now >= targetEndTime && !lastExpiryPushRef.current) {
+      lastExpiryPushRef.current = true;
+      triggerAlertFeedback();
+      void sendPushAlert(
+        userId,
+        "Expected Arrival Time Reached 🚨",
+        `Your session target arrival time has passed.`
+      );
+    }
+
+    // 3. Guardian Grace Timer overdue (User hasn't ended session after overdue target + guardian timer)
+    const guardianGraceMins = activeSession.contact_reminder_mins || 30;
+    const guardianAlertTime = (targetEndTime || 0) + guardianGraceMins * 60000;
+
+    if (targetEndTime && now >= guardianAlertTime && !lastGuardianOverduePushRef.current) {
+      lastGuardianOverduePushRef.current = true;
+      triggerAlertFeedback();
+
+      // Alert user
+      void sendPushAlert(
+        userId,
+        "Guardian Alert Escalated 🚨",
+        `You have not ended your session. Your guardians have been alerted.`
+      );
+
+      // Alert shared guardians
+      void sendPushAlert(
+        guardianUserIds,
+        "EMERGENCY: Session Overdue 🚨",
+        `Safety session to ${activeSession.destination || "destination"} is overdue and grace period expired without a safe check-in.`
+      );
+    }
+  }, [activeSession, userId, isSafetyCheckinDue, targetEndTime, clockNow, guardianUserIds]);
+
+  const onConfirmSafeClick = () => {
+    lastCheckinPushRef.current = 0;
+    handleSafeCheckin();
+  };
+
+  const onEndSessionClick = async () => {
+    handleCompleteSession();
+
+    // Notify guardians that session ended safely
+    if (guardianUserIds.length > 0) {
+      void sendPushAlert(
+        guardianUserIds,
+        "Session Ended Safely ✅",
+        `The safety session heading to ${activeSession?.destination || destination || "destination"} has ended.`
+      );
+    }
+  };
+
   const formatTime = (totalSecs: number) => {
     const hrs = Math.floor(totalSecs / 3600);
     const mins = Math.floor((totalSecs % 3600) / 60);
@@ -397,9 +480,27 @@ export function SessionPage({
     if (galleryInputRef.current) galleryInputRef.current.value = "";
   };
 
-  const isSafetyCheckinDue = !!activeSession && clockNow - new Date(
-    activeSession.last_user_checkin_at || activeSession.expected_arrival_at
-  ).getTime() >= (activeSession.user_reminder_mins || 15) * 60000;
+  const handleNextStep = (e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
+
+    if (currentStep === 1 && !destination.trim()) {
+      alert("Please enter a destination before proceeding.");
+      return;
+    }
+
+    if (currentStep < 4) {
+      setCurrentStep((s) => s + 1);
+    }
+  };
+
+  const handleFormKeyDown = (e: React.KeyboardEvent<HTMLFormElement>) => {
+    if (e.key === "Enter") {
+      if (currentStep < 4) {
+        e.preventDefault();
+        handleNextStep();
+      }
+    }
+  };
 
   const handleWizardSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -409,14 +510,29 @@ export function SessionPage({
       if (userId) {
         const result = await subscribeUserToPush(userId);
         if (!result.ok) console.warn("Push alerts may not reach this device:", result.reason);
-      } else {
-        console.warn("Push alerts could not be registered because the user profile is unavailable.");
       }
     } catch (error) {
       console.error("Push permission or subscription failed:", error);
     }
 
     handleStartSession(event, locationCoords || undefined);
+
+    // Notify user & guardians when session starts
+    if (userId) {
+      void sendPushAlert(
+        userId,
+        "Session Started 🚀",
+        `Your safety watch session to ${destination} is active.`
+      );
+    }
+
+    if (guardianUserIds.length > 0) {
+      void sendPushAlert(
+        guardianUserIds,
+        "Safety Session Shared 🛡️",
+        `A safety session heading to ${destination} has been shared with you.`
+      );
+    }
   };
 
   return (
@@ -525,7 +641,7 @@ export function SessionPage({
               {isSafetyCheckinDue ? (
                 <button
                   type="button"
-                  onClick={handleSafeCheckin}
+                  onClick={onConfirmSafeClick}
                   className="w-full max-w-sm bg-yellow-400 hover:bg-yellow-300 text-black px-5 py-4 rounded-2xl font-black text-base shadow-lg shadow-yellow-400/30 active:scale-[0.98]"
                 >
                   Confirm I’m Safe
@@ -595,7 +711,8 @@ export function SessionPage({
 
           <div className="pb-6">
             <button
-              onClick={handleCompleteSession}
+              type="button"
+              onClick={onEndSessionClick}
               disabled={sessionLoading}
               className="w-full bg-red-600 hover:bg-red-700 text-white font-extrabold py-4 rounded-full text-xs transition-all flex items-center justify-center space-x-2 active:scale-95 shadow-lg shadow-red-600/20"
             >
@@ -667,6 +784,7 @@ export function SessionPage({
 
           <form
             onSubmit={handleWizardSubmit}
+            onKeyDown={handleFormKeyDown}
             className="flex-1 flex flex-col justify-between"
           >
             {/* Sliding Container */}
@@ -695,7 +813,7 @@ export function SessionPage({
                       <MapPin className="w-4 h-4 absolute left-4 text-zinc-400" />
                       <input
                         type="text"
-                        required
+                        required={currentStep === 1}
                         placeholder="e.g. Osu Oxford Street or Home"
                         value={destination}
                         onChange={(e) => setDestination(e.target.value)}
@@ -777,7 +895,7 @@ export function SessionPage({
                       <Clock className="w-4 h-4 absolute left-4 text-zinc-400" />
                       <input
                         type="time"
-                        required
+                        required={currentStep === 2}
                         value={returnTimeStr}
                         onChange={(e) => setReturnTimeStr(e.target.value)}
                         className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl pl-11 pr-5 py-4 text-xs font-extrabold text-black dark:text-white focus:outline-none focus:border-yellow-400 transition-all shadow-inner"
@@ -821,7 +939,7 @@ export function SessionPage({
                         type="number"
                         min="1"
                         max="1440"
-                        required
+                        required={currentStep === 3}
                         value={userReminderMins}
                         onChange={(event) => setUserReminderMins(event.target.value ? Number(event.target.value) : "")}
                         className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl px-4 py-3.5 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400"
@@ -837,7 +955,7 @@ export function SessionPage({
                         type="number"
                         min="1"
                         max="1440"
-                        required
+                        required={currentStep === 3}
                         value={contactReminderMins}
                         onChange={(event) => setContactReminderMins(event.target.value ? Number(event.target.value) : "")}
                         className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl px-4 py-3.5 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400"
@@ -1029,13 +1147,7 @@ export function SessionPage({
               {currentStep < 4 ? (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (currentStep === 1 && !destination.trim()) {
-                      alert("Please enter a destination before proceeding.");
-                      return;
-                    }
-                    setCurrentStep((s) => s + 1);
-                  }}
+                  onClick={handleNextStep}
                   className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-4 rounded-full text-xs transition-all flex items-center justify-center space-x-2 active:scale-95 shadow-lg shadow-yellow-400/20"
                 >
                   <span>Next Step</span>

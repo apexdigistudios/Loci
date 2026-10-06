@@ -20,6 +20,7 @@ declare module "https://esm.sh/@supabase/supabase-js@2" {
     limit(count: number): Query<T>;
     maybeSingle(): Promise<QueryResult<T>>;
     update(values: Record<string, unknown>): Query<T>;
+    upsert(values: Record<string, unknown>, options?: { onConflict?: string }): Promise<QueryResult<T>>;
     is(column: string, value: null | boolean): Query<T>;
     delete(): Query<T>;
   }

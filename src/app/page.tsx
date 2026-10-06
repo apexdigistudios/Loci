@@ -9,6 +9,8 @@ import {
   Smartphone,
   Share2,
   ShieldAlert,
+  Heart,
+  Shield,
 } from "lucide-react";
 import { Hero } from "@/components/hero";
 import { LifestyleGallery } from "@/components/lifestyle-gallery";
@@ -63,7 +65,6 @@ export default function Home() {
     setIsPWA(isStandalone);
     if (isStandalone) {
       const splashTimer = window.setTimeout(() => setSplashComplete(true), 1700);
-      // Capture install prompt while the standalone splash is visible.
       const handleInstallWhileStarting = (event: Event) => {
         event.preventDefault();
         setDeferredPrompt(event as BeforeInstallPromptEvent);
@@ -147,93 +148,157 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="flex-1 space-y-16 pb-20 overflow-hidden">
+      <main className="flex-1 space-y-20 pb-20 overflow-hidden">
         <Hero />
+
         <ScrollReveal>
           <LifestyleGallery />
         </ScrollReveal>
 
         <ScrollReveal>
-        <section id="how-it-works" className="space-y-6 py-6">
-          <div className="text-center max-w-xl mx-auto px-6 space-y-2">
-            <ScrollReveal delay={0.08}>
-              <span className="text-[10px] font-black uppercase tracking-widest bg-yellow-400 text-black px-3.5 py-1.5 rounded-full shadow-sm">
-                How Déloci Works
-              </span>
-            </ScrollReveal>
-            <h2 className="text-2xl sm:text-4xl font-extrabold text-black dark:text-white tracking-tight">
-              Consent-First Safety. Zero Spying.
-            </h2>
-            <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400">
-              Hover over any card to pause the scroll.
-            </p>
-          </div>
-
-          <div className="relative w-full overflow-hidden">
-            <div className="absolute left-0 top-0 bottom-0 w-16 bg-linear-to-r from-white dark:from-black to-transparent z-10 pointer-events-none" />
-            <div className="absolute right-0 top-0 bottom-0 w-16 bg-linear-to-l from-white dark:from-black to-transparent z-10 pointer-events-none" />
-
-            <div className="animate-marquee flex items-center space-x-6 py-4">
-              {[...HOW_IT_WORKS_STEPS, ...HOW_IT_WORKS_STEPS].map((step, idx) => (
-                <ScrollReveal key={idx} className="shrink-0" delay={(idx % HOW_IT_WORKS_STEPS.length) * 0.1}>
-                <div className="w-70 sm:w-[320px] p-6 bg-zinc-50 dark:bg-zinc-900/80 border border-zinc-200 dark:border-zinc-800 rounded-3xl space-y-3 shadow-md hover:border-yellow-400 transition-colors">
-                  <div className="w-10 h-10 bg-yellow-400 rounded-2xl flex items-center justify-center shadow-sm">
-                    {step.icon}
-                  </div>
-                  <h3 className="text-base font-extrabold text-black dark:text-white">{step.title}</h3>
-                  <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">{step.desc}</p>
-                </div>
-                </ScrollReveal>
-              ))}
+          <section id="how-it-works" className="space-y-6 py-6">
+            <div className="text-center max-w-xl mx-auto px-6 space-y-2">
+              <ScrollReveal delay={0.08}>
+                <span className="text-[10px] font-black uppercase tracking-widest bg-yellow-400 text-black px-3.5 py-1.5 rounded-full shadow-sm">
+                  How Déloci Works
+                </span>
+              </ScrollReveal>
+              <h2 className="text-2xl sm:text-4xl font-extrabold text-black dark:text-white tracking-tight">
+                Consent-First Safety. Zero Spying.
+              </h2>
+              <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400">
+                Hover over any card to pause the scroll.
+              </p>
             </div>
-          </div>
-        </section>
+
+            <div className="relative w-full overflow-hidden">
+              <div className="absolute left-0 top-0 bottom-0 w-16 bg-gradient-to-r from-white dark:from-black to-transparent z-10 pointer-events-none" />
+              <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-white dark:from-black to-transparent z-10 pointer-events-none" />
+
+              <div className="animate-marquee flex items-center space-x-6 py-4">
+                {[...HOW_IT_WORKS_STEPS, ...HOW_IT_WORKS_STEPS].map((step, idx) => (
+                  <ScrollReveal key={idx} className="shrink-0" delay={(idx % HOW_IT_WORKS_STEPS.length) * 0.1}>
+                    <div className="w-70 sm:w-[320px] p-6 bg-zinc-50 dark:bg-zinc-900/80 border border-zinc-200 dark:border-zinc-800 rounded-3xl space-y-3 shadow-md hover:border-yellow-400 transition-colors">
+                      <div className="w-10 h-10 bg-yellow-400 rounded-2xl flex items-center justify-center shadow-sm">
+                        {step.icon}
+                      </div>
+                      <h3 className="text-base font-extrabold text-black dark:text-white">{step.title}</h3>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">{step.desc}</p>
+                    </div>
+                  </ScrollReveal>
+                ))}
+              </div>
+            </div>
+          </section>
+        </ScrollReveal>
+
+        {/* Founder Story Section */}
+        <ScrollReveal>
+          <section id="story" className="max-w-2xl mx-auto px-6 text-center space-y-6 pt-6">
+            <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-zinc-100 dark:border-zinc-800 shadow-md mx-auto bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center">
+              <img
+                src="/founder.jpg"
+                alt="Founder of Déloci"
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                }}
+              />
+              <Shield className="w-10 h-10 text-yellow-400" />
+            </div>
+
+            <div>
+              <span className="inline-flex items-center gap-1.5 bg-rose-50 dark:bg-rose-950/40 text-rose-500 dark:text-rose-400 font-bold text-xs px-3.5 py-1 rounded-full border border-rose-100 dark:border-rose-900/30">
+                <Heart className="w-3.5 h-3.5 fill-current" />
+                <span>made with love for safer journeys</span>
+              </span>
+            </div>
+
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-black dark:text-white tracking-tight lowercase">
+              why i built déloci
+            </h2>
+
+            <div className="space-y-4 text-sm sm:text-base font-normal text-zinc-600 dark:text-zinc-300 leading-relaxed lowercase text-center max-w-xl mx-auto">
+              <p>
+                after late nights walking home and solo travels where family and friends were constantly asking for "text me when you arrive" updates, i realized how stressful staying safe and keeping loved ones reassured can be.
+              </p>
+
+              <p>
+                moving freely and exploring new places is one of the most beautiful things in life. it creates core memories and deep peace of mind. i wanted to make the process of staying safe and checking in <strong className="font-extrabold text-black dark:text-white">more efficient, safe, and reassuring</strong> — so more people could experience full freedom without fear.
+              </p>
+
+              <p>
+                i dedicated myself to building this app fueled by the belief that <strong className="font-extrabold text-black dark:text-white">no one should ever have to walk home alone in fear unless they want to.</strong>
+              </p>
+
+              <p className="font-bold text-black dark:text-white pt-2">
+                — founder, déloci 🫶
+              </p>
+            </div>
+          </section>
         </ScrollReveal>
 
         <ScrollReveal>
-        <section id="install" className="max-w-6xl mx-auto px-6">
-          <div className="bg-black text-white dark:bg-zinc-900 border border-zinc-800 rounded-3xl p-8 sm:p-12 flex flex-col md:flex-row items-center justify-between gap-8">
-            <div className="space-y-4 max-w-lg">
-              <span className="text-[10px] font-black uppercase tracking-widest bg-yellow-400 text-black px-3 py-1 rounded-md">
-                Progressive Web App
-              </span>
-              <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-                Install Déloci Directly on Your Phone or Computer
-              </h2>
-              <p className="text-xs sm:text-sm text-zinc-400 leading-relaxed">
-                No app store required. Install directly from your browser for native standalone access.
-              </p>
+          <section id="install" className="max-w-6xl mx-auto px-6">
+            <div className="bg-black text-white dark:bg-zinc-900 border border-zinc-800 rounded-3xl p-8 sm:p-12 flex flex-col md:flex-row items-center justify-between gap-8">
+              <div className="space-y-4 max-w-lg">
+                <span className="text-[10px] font-black uppercase tracking-widest bg-yellow-400 text-black px-3 py-1 rounded-md">
+                  Progressive Web App
+                </span>
+                <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+                  Install Déloci Directly on Your Phone or Computer
+                </h2>
+                <p className="text-xs sm:text-sm text-zinc-400 leading-relaxed">
+                  No app store required. Install directly from your browser for native standalone access.
+                </p>
 
-              <div className="space-y-2 pt-2 text-xs text-zinc-300">
-                <div className="flex items-center space-x-2">
-                  <Smartphone className="w-4 h-4 text-yellow-400 shrink-0" />
-                  <span><strong>iOS Safari:</strong> Tap Share icon &rarr; "Add to Home Screen"</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Share2 className="w-4 h-4 text-yellow-400 shrink-0" />
-                  <span><strong>Chrome / Android:</strong> Click Install App button</span>
+                <div className="space-y-2 pt-2 text-xs text-zinc-300">
+                  <div className="flex items-center space-x-2">
+                    <Smartphone className="w-4 h-4 text-yellow-400 shrink-0" />
+                    <span><strong>iOS Safari:</strong> Tap Share icon &rarr; "Add to Home Screen"</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Share2 className="w-4 h-4 text-yellow-400 shrink-0" />
+                    <span><strong>Chrome / Android:</strong> Click Install App button</span>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <button
-              onClick={handleInstallClick}
-              className="bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold px-8 py-4 rounded-2xl text-sm transition-all flex items-center space-x-2 shrink-0 shadow-lg shadow-yellow-400/10 active:scale-[0.98]"
-            >
-              <Download className="w-5 h-5 text-black" />
-              <span>Install App Now</span>
-            </button>
-          </div>
-        </section>
+              <button
+                onClick={handleInstallClick}
+                className="bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold px-8 py-4 rounded-2xl text-sm transition-all flex items-center space-x-2 shrink-0 shadow-lg shadow-yellow-400/10 active:scale-[0.98]"
+              >
+                <Download className="w-5 h-5 text-black" />
+                <span>Install App Now</span>
+              </button>
+            </div>
+          </section>
         </ScrollReveal>
       </main>
 
       <ScrollReveal>
-      <footer className="border-t border-zinc-200 dark:border-zinc-900 py-8 flex flex-col items-center justify-center space-y-2 text-xs text-zinc-500">
-        <img src="/loci-light.png" alt="Déloci" className="h-8 w-auto object-contain shrink-0 opacity-80 dark:hidden" />
-        <img src="/loci-dark.png" alt="Déloci" className="hidden h-8 w-auto object-contain shrink-0 opacity-80 dark:block" />
-        <p>Déloci Safety Check-In &bull; Transparent, Consent-First &amp; Open</p>
-      </footer>
+        <footer className="border-t border-zinc-200 dark:border-zinc-900 py-10 px-6 bg-zinc-50/50 dark:bg-zinc-950/50">
+          <div className="max-w-6xl mx-auto flex flex-col items-center justify-center space-y-4 text-center">
+            <div className="flex items-center space-x-2">
+              <img src="/loci-light.png" alt="Déloci" className="h-8 w-auto object-contain shrink-0 opacity-90 dark:hidden" />
+              <img src="/loci-dark.png" alt="Déloci" className="hidden h-8 w-auto object-contain shrink-0 opacity-90 dark:block" />
+            </div>
+
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-sm">
+              Déloci Safety Check-In &bull; Consent-First, Automated &amp; Transparent
+            </p>
+
+            <div className="flex flex-wrap items-center justify-center gap-6 text-xs font-semibold text-zinc-500 dark:text-zinc-400 pt-2">
+              <a href="#how-it-works" className="hover:text-black dark:hover:text-white transition-colors">How It Works</a>
+              <a href="#story" className="hover:text-black dark:hover:text-white transition-colors">Our Story</a>
+              <a href="#install" className="hover:text-black dark:hover:text-white transition-colors">Install App</a>
+            </div>
+
+            <p className="text-[11px] text-zinc-400 dark:text-zinc-600 pt-2">
+              © {new Date().getFullYear()} Déloci. All rights reserved.
+            </p>
+          </div>
+        </footer>
       </ScrollReveal>
     </div>
   );

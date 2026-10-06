@@ -52,3 +52,40 @@ export function triggerAlertFeedback() {
     console.warn("Could not play alert sound:", error);
   }
 }
+
+export async function sendPushAlert(
+  userIds: string | string[],
+  title: string,
+  message: string
+) {
+  if (!userIds) return;
+  const targetIds = Array.isArray(userIds) ? userIds.filter(Boolean) : [userIds];
+  if (targetIds.length === 0) return;
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !anonKey) return;
+
+  try {
+    await Promise.all(
+      targetIds.map((id) =>
+        fetch(`${supabaseUrl}/functions/v1/send-push`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${anonKey}`,
+          },
+          body: JSON.stringify({
+            action: "send",
+            user_id: id,
+            title,
+            body: message,
+            url: "/",
+          }),
+        })
+      )
+    );
+  } catch (error) {
+    console.error("Failed to dispatch push alert:", error);
+  }
+}

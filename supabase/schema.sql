@@ -74,15 +74,22 @@ create table if not exists public.session_recipients (
 create table if not exists public.user_push_subscriptions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references public.users(id) on delete cascade,
-  user_phone text not null references public.users(phone) on delete cascade,
+  user_phone text references public.users(phone) on delete cascade,
   endpoint text not null unique,
   p256dh text not null,
   auth text not null,
-  created_at timestamptz not null default now()
+  device_info jsonb not null default '{}'::jsonb,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 alter table public.user_push_subscriptions
-  add column if not exists user_id uuid references public.users(id) on delete cascade;
+  add column if not exists user_id uuid references public.users(id) on delete cascade,
+  add column if not exists device_info jsonb not null default '{}'::jsonb,
+  add column if not exists is_active boolean not null default true,
+  add column if not exists updated_at timestamptz not null default now(),
+  alter column user_phone drop not null;
 
 update public.user_push_subscriptions as subscriptions
 set user_id = users.id
@@ -90,14 +97,8 @@ from public.users
 where subscriptions.user_id is null
   and subscriptions.user_phone = users.phone;
 
-create table if not exists public.user_push_subscriptions (
-  id uuid primary key default gen_random_uuid(),
-  user_phone text not null references public.users(phone) on delete cascade,
-  endpoint text not null unique,
-  p256dh text not null,
-  auth text not null,
-  created_at timestamptz not null default now()
-);
+alter table public.user_push_subscriptions
+  alter column user_id set not null;
 
 -- Phone lookups, feed filters, recipient resolution, and session status queries.
 create index if not exists trusted_contacts_user_phone_idx

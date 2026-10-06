@@ -23,6 +23,7 @@ import { supabase } from "@/lib/supabase";
 interface ProfilePageProps {
   fullName: string;
   nickname: string;
+  userId: string | null;
   userPhone: string;
   avatarUrl?: string;
   onAvatarChange?: (url: string) => void;
@@ -31,12 +32,14 @@ interface ProfilePageProps {
   locationCoords: { lat: number; lng: number } | null;
   triggerNotificationPrompt: () => void;
   triggerLocationPrompt: () => void;
+  onTestPush: () => Promise<string>;
   onLogout: () => void;
 }
 
 export function ProfilePage({
   fullName,
   nickname,
+  userId,
   userPhone,
   avatarUrl,
   onAvatarChange,
@@ -45,11 +48,14 @@ export function ProfilePage({
   locationCoords,
   triggerNotificationPrompt,
   triggerLocationPrompt,
+  onTestPush,
   onLogout,
 }: ProfilePageProps) {
   const [subView, setSubView] = useState<"profile" | "settings">("profile");
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [currentAvatar, setCurrentAvatar] = useState<string | undefined>(avatarUrl);
+  const [testPushBusy, setTestPushBusy] = useState(false);
+  const [testPushResult, setTestPushResult] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { theme, setTheme } = useTheme();
@@ -331,6 +337,28 @@ export function ProfilePage({
               </button>
             )}
           </div>
+
+          {process.env.NODE_ENV === "development" && (
+            <div className="space-y-2 rounded-2xl border border-zinc-200/60 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 p-4">
+              <button
+                type="button"
+                disabled={testPushBusy || !userId}
+                onClick={async () => {
+                  setTestPushBusy(true);
+                  setTestPushResult("");
+                  try {
+                    setTestPushResult(await onTestPush());
+                  } finally {
+                    setTestPushBusy(false);
+                  }
+                }}
+                className="w-full rounded-xl bg-yellow-400 py-3 text-xs font-black text-black disabled:opacity-50"
+              >
+                {testPushBusy ? "Sending test notification..." : "Send Test Notification"}
+              </button>
+              {testPushResult && <p role="status" className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">{testPushResult}</p>}
+            </div>
+          )}
 
           <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-2xl border border-zinc-200/50 dark:border-zinc-800/50 rounded-[26px] p-4 flex items-center justify-between shadow-sm">
             <div className="space-y-0.5">
