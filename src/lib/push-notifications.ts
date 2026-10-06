@@ -1,4 +1,10 @@
-import { supabase } from "@/lib/supabase";
+type SubscriptionResult =
+  | { ok: true; subscription: PushSubscription }
+  | { ok: false; reason: string };
+
+type TestPushResult =
+  | { ok: true; data: { delivered?: number; [key: string]: unknown } }
+  | { ok: false; reason: string };
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -26,7 +32,7 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
   }
 }
 
-export async function subscribeUserToPush(userId: string) {
+export async function subscribeUserToPush(userId: string): Promise<SubscriptionResult> {
   const registration = await registerServiceWorker();
   if (!registration) return { ok: false, reason: "Service Workers unsupported" };
 
@@ -80,7 +86,7 @@ export async function subscribeUserToPush(userId: string) {
       }),
     });
 
-    const resData = await response.json().catch(() => ({}));
+    const resData = await response.json().catch(() => ({})) as { error?: string; [key: string]: unknown };
 
     if (!response.ok || resData.error) {
       console.error("Edge function subscribe error:", resData);
@@ -88,13 +94,13 @@ export async function subscribeUserToPush(userId: string) {
     }
 
     return { ok: true, subscription };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Push subscription failed:", error);
-    return { ok: false, reason: error?.message || "Subscription error" };
+    return { ok: false, reason: error instanceof Error ? error.message : "Subscription error" };
   }
 }
 
-export async function sendTestPushNotification(userId: string) {
+export async function sendTestPushNotification(userId: string): Promise<TestPushResult> {
   // 1. Ensure user is subscribed first
   const subResult = await subscribeUserToPush(userId);
   if (!subResult.ok) {
@@ -120,7 +126,7 @@ export async function sendTestPushNotification(userId: string) {
       }),
     });
 
-    const resData = await response.json().catch(() => ({}));
+    const resData = await response.json().catch(() => ({})) as { error?: string; delivered?: number; [key: string]: unknown };
 
     if (!response.ok || resData.error) {
       console.error("Test push dispatch error:", resData);
@@ -128,8 +134,8 @@ export async function sendTestPushNotification(userId: string) {
     }
 
     return { ok: true, data: resData };
-  } catch (error: any) {
-    return { ok: false, reason: error?.message || "Network request failed" };
+  } catch (error: unknown) {
+    return { ok: false, reason: error instanceof Error ? error.message : "Network request failed" };
   }
 }
 

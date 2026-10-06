@@ -101,31 +101,31 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const { theme, resolvedTheme } = useTheme();
   const notificationPermissionRequestRef = useRef<Promise<NotificationPermissionResult> | null>(null);
 
-  const ensureNotificationPermission = useCallback(async () => {
-    if (typeof window === "undefined" || !("Notification" in window)) return null;
-    if (Notification.permission !== "default") {
-      setNotificationPermission(Notification.permission);
-      if (Notification.permission === "granted" && userId) void subscribeUserToPush(userId);
-      return Notification.permission;
-    }
+  const ensureNotificationPermission = useCallback(async (): Promise<NotificationPermissionResult> => {
+    if (typeof window === "undefined" || !("Notification" in window)) return "unsupported";
     if (notificationPermissionRequestRef.current) return notificationPermissionRequestRef.current;
 
-    const permissionRequest = requestNotificationPermission()
-      .then((permission) => {
+    const permissionRequest = (async () => {
+      try {
+        const permission = Notification.permission === "default"
+          ? await requestNotificationPermission()
+          : Notification.permission;
         if (permission !== "unsupported") setNotificationPermission(permission);
-        if (permission === "granted" && userId) void subscribeUserToPush(userId);
+        if (permission === "granted" && userId) {
+          const subscription = await subscribeUserToPush(userId);
+          if (!subscription.ok) console.warn("Push subscription was not registered:", subscription.reason);
+        }
         return permission;
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         console.error("Notification prompt error:", err);
         return Notification.permission;
-      })
-      .finally(() => {
+      } finally {
         notificationPermissionRequestRef.current = null;
-      });
+      }
+    })();
     notificationPermissionRequestRef.current = permissionRequest;
     return permissionRequest;
-  }, [userId, userPhone]);
+  }, [userId]);
 
   useEffect(() => {
     setMounted(true);
