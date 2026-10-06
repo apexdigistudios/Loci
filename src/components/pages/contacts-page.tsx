@@ -41,6 +41,7 @@ interface CustomGroup {
 
 interface ContactsPageProps {
   userPhone: string;
+  currentUserId: string | null;
   openSessionId?: string | null;
   onSessionOpened?: () => void;
   contacts: Contact[];
@@ -85,6 +86,7 @@ const DEFAULT_GROUPS = [
 
 export function ContactsPage({
   userPhone,
+  currentUserId,
   openSessionId,
   onSessionOpened,
   contacts,
@@ -661,6 +663,7 @@ export function ContactsPage({
       {subTab === "shared" && (
         <SharedSessionsPage
           userPhone={userPhone}
+          currentUserId={currentUserId}
           contacts={contacts}
           openSessionId={openSessionId}
           onSessionOpened={onSessionOpened}

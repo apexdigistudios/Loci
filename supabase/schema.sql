@@ -26,6 +26,7 @@ create table if not exists public.trusted_contacts (
 
 create table if not exists public.checkin_sessions (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid references public.users(id) on delete cascade,
   user_phone text not null references public.users(phone) on delete cascade,
   destination text not null,
   expected_arrival_at timestamptz not null,
@@ -47,6 +48,7 @@ create table if not exists public.checkin_sessions (
 );
 
 alter table public.checkin_sessions
+  add column if not exists user_id uuid references public.users(id) on delete cascade,
   add column if not exists user_reminder_mins integer not null default 15,
   add column if not exists contact_reminder_mins integer not null default 30,
   add column if not exists last_user_checkin_at timestamptz not null default now(),
@@ -54,6 +56,12 @@ alter table public.checkin_sessions
   add column if not exists session_started_push_sent_at timestamptz,
   add column if not exists session_completed_push_sent_at timestamptz,
   add column if not exists guardian_alert_sent_at timestamptz;
+
+update public.checkin_sessions as sessions
+set user_id = users.id
+from public.users
+where sessions.user_id is null
+  and sessions.user_phone = users.phone;
 
 create table if not exists public.session_recipients (
   id uuid primary key default gen_random_uuid(),
@@ -65,12 +73,22 @@ create table if not exists public.session_recipients (
 
 create table if not exists public.user_push_subscriptions (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid references public.users(id) on delete cascade,
   user_phone text not null references public.users(phone) on delete cascade,
   endpoint text not null unique,
   p256dh text not null,
   auth text not null,
   created_at timestamptz not null default now()
 );
+
+alter table public.user_push_subscriptions
+  add column if not exists user_id uuid references public.users(id) on delete cascade;
+
+update public.user_push_subscriptions as subscriptions
+set user_id = users.id
+from public.users
+where subscriptions.user_id is null
+  and subscriptions.user_phone = users.phone;
 
 create table if not exists public.user_push_subscriptions (
   id uuid primary key default gen_random_uuid(),
@@ -88,6 +106,8 @@ create index if not exists trusted_contacts_phone_idx
   on public.trusted_contacts(phone);
 create index if not exists checkin_sessions_user_phone_idx
   on public.checkin_sessions(user_phone);
+create index if not exists checkin_sessions_user_id_idx
+  on public.checkin_sessions(user_id);
 create index if not exists checkin_sessions_status_idx
   on public.checkin_sessions(status);
 create index if not exists checkin_sessions_created_at_idx
@@ -100,6 +120,8 @@ create index if not exists session_recipients_recipient_phone_idx
   on public.session_recipients(recipient_phone);
 create index if not exists user_push_subscriptions_user_phone_idx
   on public.user_push_subscriptions(user_phone);
+create index if not exists user_push_subscriptions_user_id_idx
+  on public.user_push_subscriptions(user_id);
 create index if not exists user_push_subscriptions_user_phone_idx
   on public.user_push_subscriptions(user_phone);
 

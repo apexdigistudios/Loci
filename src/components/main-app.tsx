@@ -6,7 +6,7 @@ import { useTheme } from "next-themes";
 import { supabase } from "@/lib/supabase";
 import { cleanPhone } from "@/lib/utils";
 import { requestNotificationPermission, type NotificationPermissionResult } from "@/lib/notifications";
-import { subscribeToPush } from "@/lib/push";
+import { subscribeUserToPush } from "@/lib/push-notifications";
 import { prepareAlertFeedback } from "@/lib/alerts";
 
 import { HomePage } from "@/components/pages/home-page";
@@ -22,6 +22,7 @@ interface MainAppProps {
 
 interface ActiveSession {
   id: string;
+  user_id?: string;
   destination: string;
   expected_arrival_at: string;
   status: "active" | "completed" | "missed" | "escalated";
@@ -70,6 +71,7 @@ const BANNERS = [
 export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const [activeTab, setActiveTab] = useState<"home" | "session" | "contacts" | "share" | "profile">("home");
   const [nickname, setNickname] = useState("");
+  const [userId, setUserId] = useState<string | null>(null);
   const [fullName, setFullName] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -103,7 +105,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     if (typeof window === "undefined" || !("Notification" in window)) return null;
     if (Notification.permission !== "default") {
       setNotificationPermission(Notification.permission);
-      if (Notification.permission === "granted") void subscribeToPush(userPhone);
+      if (Notification.permission === "granted" && userId) void subscribeUserToPush(userId);
       return Notification.permission;
     }
     if (notificationPermissionRequestRef.current) return notificationPermissionRequestRef.current;
@@ -111,7 +113,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     const permissionRequest = requestNotificationPermission()
       .then((permission) => {
         if (permission !== "unsupported") setNotificationPermission(permission);
-        if (permission === "granted") void subscribeToPush(userPhone);
+        if (permission === "granted" && userId) void subscribeUserToPush(userId);
         return permission;
       })
       .catch((err: unknown) => {
@@ -123,12 +125,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       });
     notificationPermissionRequestRef.current = permissionRequest;
     return permissionRequest;
-  }, [userPhone]);
+  }, [userId, userPhone]);
 
   useEffect(() => {
     setMounted(true);
-    void ensureNotificationPermission();
-  }, [ensureNotificationPermission]);
+    if (typeof window !== "undefined" && "Notification" in window) {
+      setNotificationPermission(Notification.permission);
+    }
+  }, []);
 
   useEffect(() => {
     const sharedSessionId = new URLSearchParams(window.location.search).get("sharedSessionId");
@@ -177,14 +181,17 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     try {
       const { data: userData } = await supabase
         .from("users")
-        .select("full_name, nickname, avatar_url")
+        .select("id, full_name, nickname, avatar_url")
         .eq("phone", userPhone)
         .maybeSingle();
 
       if (userData) {
+        setUserId(userData.id);
         setFullName(userData.full_name || "");
         setNickname(userData.nickname || "");
         setAvatarUrl(userData.avatar_url || "");
+      } else {
+        setUserId(null);
       }
 
       const { data: contactsData } = await supabase
@@ -373,7 +380,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   ) => {
     e.preventDefault();
     void prepareAlertFeedback();
-    await ensureNotificationPermission();
     const finalMins = Number(durationMinutes) || 30;
     const destName = destination.trim() || "Destination Check-In";
 
@@ -401,6 +407,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       const { data, error } = await supabase
         .from("checkin_sessions")
         .insert({
+          user_id: userId,
           user_phone: userPhone,
           destination: destName,
           expected_arrival_at: arrivalTime,
@@ -615,6 +622,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             {activeTab === "session" && (
               <SessionPage
                 sessionHeadingSrc={sessionHeadingSrc}
+                userId={userId}
                 activeSession={activeSession}
                 destination={destination}
                 setDestination={setDestination}
@@ -639,6 +647,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             {activeTab === "contacts" && (
               <ContactsPage
                 userPhone={userPhone}
+                currentUserId={userId}
                 openSessionId={requestedSharedSessionId}
                 onSessionOpened={() => setRequestedSharedSessionId(null)}
                 contacts={contacts}

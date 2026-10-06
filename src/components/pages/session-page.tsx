@@ -17,12 +17,11 @@ import {
   ArrowRight,
   Shield,
   Sparkles,
-  Smartphone,
-  Server,
   Radio,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { SatelliteMap } from "@/components/ui/satellite-map";
+import { subscribeUserToPush } from "@/lib/push-notifications";
 
 interface Contact {
   id: string;
@@ -50,6 +49,7 @@ interface SessionCoordinates {
 
 interface SessionPageProps {
   sessionHeadingSrc: string;
+  userId: string | null;
   activeSession: ActiveSession | null;
   destination: string;
   setDestination: (v: string) => void;
@@ -72,6 +72,7 @@ interface SessionPageProps {
 
 export function SessionPage({
   sessionHeadingSrc,
+  userId,
   activeSession,
   destination,
   setDestination,
@@ -91,15 +92,12 @@ export function SessionPage({
   handleSafeCheckin,
   onNavigate,
 }: SessionPageProps) {
-  // 5-Step Setup Wizard
+  // 4-Step Setup Wizard
   // Step 1: Destination & GPS Pin
   // Step 2: Return Time & Day Schedule
   // Step 3: Self Check-In & Guardian Alert Intervals
-  // Step 4: Guardian & Circle Group Selection
-  // Step 5: Delivery Method (In-Phone Push / Supabase Server Edge) & Media/Notes
+  // Step 4: Guardian/Circle Selection & Optional Selfie/Notes
   const [currentStep, setCurrentStep] = useState<number>(1);
-
-  const [deliveryChannel, setDeliveryChannel] = useState<"server_push" | "local_push" | "both">("server_push");
 
   const [attachedMedia, setAttachedMedia] = useState<{
     file: File;
@@ -403,6 +401,24 @@ export function SessionPage({
     activeSession.last_user_checkin_at || activeSession.expected_arrival_at
   ).getTime() >= (activeSession.user_reminder_mins || 15) * 60000;
 
+  const handleWizardSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (currentStep !== 4 || sessionLoading) return;
+
+    try {
+      if (userId) {
+        const result = await subscribeUserToPush(userId);
+        if (!result.ok) console.warn("Push alerts may not reach this device:", result.reason);
+      } else {
+        console.warn("Push alerts could not be registered because the user profile is unavailable.");
+      }
+    } catch (error) {
+      console.error("Push permission or subscription failed:", error);
+    }
+
+    handleStartSession(event, locationCoords || undefined);
+  };
+
   return (
     <>
       {/* CAMERA OVERLAY */}
@@ -592,7 +608,7 @@ export function SessionPage({
           </div>
         </div>
       ) : (
-        /* 5-STEP WIZARD PAGEVIEW */
+        /* 4-STEP WIZARD PAGEVIEW */
         <div className="pt-[max(0.5rem,env(safe-area-inset-top))] space-y-4 max-w-md mx-auto min-h-[82vh] flex flex-col justify-between">
           <input
             ref={galleryInputRef}
@@ -625,20 +641,19 @@ export function SessionPage({
               <div className="w-9" />
             </div>
 
-            {/* Segmented 5-Step Bar */}
+            {/* Segmented 4-Step Bar */}
             <div className="space-y-1.5 px-1">
               <div className="flex items-center justify-between text-[11px] font-black uppercase tracking-wider text-zinc-400">
                 <span>
                   {currentStep === 1 && "1. Route & GPS Pin"}
                   {currentStep === 2 && "2. Schedule Return"}
                   {currentStep === 3 && "3. Reminder Intervals"}
-                  {currentStep === 4 && "4. Guardians & Circle"}
-                  {currentStep === 5 && "5. Delivery & Proof"}
+                  {currentStep === 4 && "4. Guardians, Selfie & Notes"}
                 </span>
-                <span>Step {currentStep} of 5</span>
+                <span>Step {currentStep} of 4</span>
               </div>
               <div className="flex items-center gap-1.5">
-                {[1, 2, 3, 4, 5].map((step) => (
+                {[1, 2, 3, 4].map((step) => (
                   <div
                     key={step}
                     className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${
@@ -651,7 +666,7 @@ export function SessionPage({
           </div>
 
           <form
-            onSubmit={(event) => handleStartSession(event, locationCoords || undefined)}
+            onSubmit={handleWizardSubmit}
             className="flex-1 flex flex-col justify-between"
           >
             {/* Sliding Container */}
@@ -832,7 +847,7 @@ export function SessionPage({
                   </div>
                 </div>
 
-                {/* STEP 4: GUARDIAN SELECTION */}
+                {/* STEP 4: GUARDIANS, SELFIE & NOTES */}
                 <div className="w-full shrink-0 space-y-5 px-1">
                   <div className="space-y-1">
                     <h2 className="text-lg font-black text-black dark:text-white flex items-center gap-2">
@@ -941,63 +956,8 @@ export function SessionPage({
                       </div>
                     )}
                   </div>
-                </div>
 
-                {/* STEP 5: DELIVERY METHOD & PROOF */}
-                <div className="w-full shrink-0 space-y-5 px-1">
-                  <div className="space-y-1">
-                    <h2 className="text-lg font-black text-black dark:text-white flex items-center gap-2">
-                      <span>Delivery & Proof</span>
-                      <Sparkles className="w-5 h-5 text-yellow-400" />
-                    </h2>
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      Choose how alerts are sent and attach optional selfie or vehicle notes.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="block text-xs font-extrabold text-black dark:text-white">
-                      Alert Delivery Channel
-                    </label>
-                    <div className="grid grid-cols-1 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setDeliveryChannel("server_push")}
-                        className={`flex items-start gap-3 p-3 rounded-2xl border text-left transition-all ${
-                          deliveryChannel === "server_push"
-                            ? "border-yellow-400 bg-yellow-400/10 dark:bg-yellow-400/10 text-black dark:text-white"
-                            : "border-zinc-300/50 dark:border-zinc-800 bg-zinc-200/40 dark:bg-zinc-900/60 text-zinc-500"
-                        }`}
-                      >
-                        <Server className={`w-5 h-5 shrink-0 mt-0.5 ${deliveryChannel === "server_push" ? "text-yellow-400" : "text-zinc-400"}`} />
-                        <div>
-                          <p className="text-xs font-bold text-black dark:text-white">Supabase Edge Server Push</p>
-                          <p className="text-[10px] text-zinc-500 dark:text-zinc-400 leading-tight">
-                            Server-triggered background Web Push (VAPID) even if your phone battery dies or loses connection.
-                          </p>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setDeliveryChannel("local_push")}
-                        className={`flex items-start gap-3 p-3 rounded-2xl border text-left transition-all ${
-                          deliveryChannel === "local_push"
-                            ? "border-yellow-400 bg-yellow-400/10 dark:bg-yellow-400/10 text-black dark:text-white"
-                            : "border-zinc-300/50 dark:border-zinc-800 bg-zinc-200/40 dark:bg-zinc-900/60 text-zinc-500"
-                        }`}
-                      >
-                        <Smartphone className={`w-5 h-5 shrink-0 mt-0.5 ${deliveryChannel === "local_push" ? "text-yellow-400" : "text-zinc-400"}`} />
-                        <div>
-                          <p className="text-xs font-bold text-black dark:text-white">In-Phone Local Device Push</p>
-                          <p className="text-[10px] text-zinc-500 dark:text-zinc-400 leading-tight">
-                            Local device notifications scheduled directly on this phone.
-                          </p>
-                        </div>
-                      </button>
-                    </div>
-                  </div>
-
+                  {/* OPTIONAL SELFIE & NOTES */}
                   <div className="space-y-2.5">
                     <label className="block text-xs font-extrabold text-black dark:text-white">
                       Selfie / Proof & Notes (Optional)
@@ -1066,7 +1026,7 @@ export function SessionPage({
                 </button>
               )}
 
-              {currentStep < 5 ? (
+              {currentStep < 4 ? (
                 <button
                   type="button"
                   onClick={() => {

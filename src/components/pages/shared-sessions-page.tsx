@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Radio,
   Loader2,
@@ -14,6 +14,7 @@ import {
   Users,
   MessageSquare,
   Navigation,
+  Plus,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { SatelliteMap } from "../ui/satellite-map";
@@ -30,10 +31,14 @@ export interface Contact {
 
 export interface SharedSession {
   id: string;
+  user_id?: string;
   user_phone: string;
   destination: string;
   expected_arrival_at: string;
   status: "active" | "completed" | "missed" | "escalated" | "expired";
+  user_reminder_mins?: number;
+  contact_reminder_mins?: number;
+  last_user_checkin_at?: string;
   notes?: string;
   media_url?: string;
   created_at: string;
@@ -72,6 +77,13 @@ function formatSessionDuration(startedAt: string, expectedArrivalAt: string) {
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
+function formatCountdown(totalSeconds: number) {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
 function getSessionParticipantNames(session: SharedSession, contacts: Contact[], userPhone: string, ownerName: string) {
   const row = session as Record<string, unknown>;
   const storedParticipants = row.participants ?? row.shared_with ?? row.guardian_phones;
@@ -95,6 +107,7 @@ function getSessionParticipantNames(session: SharedSession, contacts: Contact[],
 
 interface SharedSessionsPageProps {
   userPhone: string;
+  currentUserId: string | null;
   contacts: Contact[];
   openSessionId?: string | null;
   onSessionOpened?: () => void;
@@ -102,6 +115,7 @@ interface SharedSessionsPageProps {
 
 export function SharedSessionsPage({
   userPhone,
+  currentUserId,
   contacts,
   openSessionId,
   onSessionOpened,
@@ -110,6 +124,34 @@ export function SharedSessionsPage({
   const [historySessions, setHistorySessions] = useState<SharedSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [activeDetailSession, setActiveDetailSession] = useState<SharedSession | null>(null);
+  const [guardianPhones, setGuardianPhones] = useState<string[]>([]);
+  const [detailNow, setDetailNow] = useState(0);
+  const [shareFeedback, setShareFeedback] = useState("");
+  const mapSectionRef = useRef<HTMLDivElement>(null);
+  const activeDetailSessionId = activeDetailSession?.id;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setDetailNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!activeDetailSessionId) return;
+    let cancelled = false;
+    void supabase
+      .from("session_recipients")
+      .select("recipient_phone")
+      .eq("session_id", activeDetailSessionId)
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          console.error("Failed to load session guardians:", error);
+          return;
+        }
+        setGuardianPhones([...new Set((data || []).map((recipient) => recipient.recipient_phone))]);
+      });
+    return () => { cancelled = true; };
+  }, [activeDetailSessionId]);
 
   const fetchSharedSessions = useCallback(async () => {
     setSessionsLoading(true);
@@ -142,7 +184,8 @@ export function SharedSessionsPage({
 
       const activeRows = (activeResponse.data || []).filter((session) => {
         const ownerPhone = cleanPhone(session.user_phone);
-        return ownerPhone !== currentUserPhone && (contactPhones.has(ownerPhone) || matchedRecipientIds.has(session.id));
+        const isOwner = !!currentUserId && session.user_id === currentUserId;
+        return isOwner || (ownerPhone !== currentUserPhone && (contactPhones.has(ownerPhone) || matchedRecipientIds.has(session.id)));
       });
 
       const historyById = new Map<string, Record<string, unknown>>();
@@ -175,11 +218,7 @@ export function SharedSessionsPage({
 
       const formattedActive = activeRows.map(formatSession);
       const formattedHistory = historyRows.map(formatSession);
-      const now = Date.now();
-
-      setSharedSessions(formattedActive.filter((session) =>
-        new Date(session.expected_arrival_at).getTime() >= now
-      ));
+      setSharedSessions(formattedActive);
       setHistorySessions(formattedHistory);
       setActiveDetailSession((current) => current
         ? [...formattedActive, ...formattedHistory].find((session) => session.id === current.id) || current
@@ -190,10 +229,10 @@ export function SharedSessionsPage({
     } finally {
       setSessionsLoading(false);
     }
-  }, [contacts, userPhone]);
+  }, [contacts, currentUserId, userPhone]);
 
   useEffect(() => {
-    fetchSharedSessions();
+    const loadTimer = window.setTimeout(() => void fetchSharedSessions(), 0);
 
     const channel = supabase
       .channel("checkin_sessions_realtime_feed")
@@ -207,6 +246,7 @@ export function SharedSessionsPage({
       .subscribe();
 
     return () => {
+      window.clearTimeout(loadTimer);
       supabase.removeChannel(channel);
     };
   }, [fetchSharedSessions]);
@@ -215,13 +255,74 @@ export function SharedSessionsPage({
     if (!openSessionId) return;
     const targetSession = sharedSessions.find((session) => session.id === openSessionId);
     if (!targetSession) return;
-    setActiveDetailSession(targetSession);
-    onSessionOpened?.();
+    const openTimer = window.setTimeout(() => {
+      setActiveDetailSession(targetSession);
+      onSessionOpened?.();
+    }, 0);
+    return () => window.clearTimeout(openTimer);
   }, [openSessionId, onSessionOpened, sharedSessions]);
 
   const activeDetailCoordinates = activeDetailSession
     ? getSessionCoordinates(activeDetailSession)
     : null;
+
+  const confirmSafe = async (session: SharedSession) => {
+    const checkedInAt = new Date().toISOString();
+    const { error } = await supabase
+      .from("checkin_sessions")
+      .update({ last_user_checkin_at: checkedInAt })
+      .eq("id", session.id)
+      .eq("status", "active");
+    if (error) {
+      console.error("Failed to record safety check-in:", error);
+      return;
+    }
+    setActiveDetailSession({ ...session, last_user_checkin_at: checkedInAt });
+  };
+
+  const extendSession = async (session: SharedSession) => {
+    const newArrival = new Date(Math.max(Date.now(), new Date(session.expected_arrival_at).getTime()) + 15 * 60000).toISOString();
+    const { error } = await supabase
+      .from("checkin_sessions")
+      .update({ expected_arrival_at: newArrival })
+      .eq("id", session.id)
+      .eq("status", "active");
+    if (error) {
+      console.error("Failed to extend safety session:", error);
+      return;
+    }
+    setActiveDetailSession({ ...session, expected_arrival_at: newArrival });
+  };
+
+  const endSession = async (session: SharedSession) => {
+    const { error } = await supabase
+      .from("checkin_sessions")
+      .update({ status: "completed" })
+      .eq("id", session.id)
+      .eq("status", "active");
+    if (error) {
+      console.error("Failed to end safety session:", error);
+      return;
+    }
+    setActiveDetailSession({ ...session, status: "completed" });
+  };
+
+  const shareEmergencyDetails = async (session: SharedSession, ownerName: string) => {
+    const details = `${ownerName} is on a Déloci safety session. Destination: ${session.destination}. Expected arrival: ${new Date(session.expected_arrival_at).toLocaleString()}. Phone: ${session.user_phone}.`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: `${ownerName}'s safety session`, text: details });
+      } else {
+        await navigator.clipboard.writeText(details);
+        setShareFeedback("Emergency details copied");
+        window.setTimeout(() => setShareFeedback(""), 2500);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name !== "AbortError") {
+        console.error("Could not share emergency details:", error);
+      }
+    }
+  };
 
   // FULL PAGE VIEW (COMPACT CARDS)
   if (activeDetailSession) {
@@ -229,6 +330,22 @@ export function SharedSessionsPage({
       activeDetailSession.user?.full_name ||
       contacts.find((c) => cleanPhone(c.phone) === cleanPhone(activeDetailSession.user_phone))?.name ||
       "Circle Friend";
+    const isSender = !!currentUserId && activeDetailSession.user_id === currentUserId;
+    const expectedArrivalMs = new Date(activeDetailSession.expected_arrival_at).getTime();
+    const lastCheckinMs = new Date(activeDetailSession.last_user_checkin_at || activeDetailSession.created_at).getTime();
+    const isOverdue = activeDetailSession.status === "missed" ||
+      activeDetailSession.status === "escalated" ||
+      (activeDetailSession.status === "active" && detailNow > 0 && (
+        detailNow >= expectedArrivalMs + (activeDetailSession.contact_reminder_mins || 30) * 60000 ||
+        detailNow >= lastCheckinMs + (activeDetailSession.user_reminder_mins || 15) * 60000
+      ));
+    const statusLabel = activeDetailSession.status === "completed"
+      ? "SAFE"
+      : isOverdue
+        ? "OVERDUE / MISSED CHECK-IN"
+        : "ACTIVE";
+    const countdownSeconds = detailNow > 0 ? Math.max(0, Math.floor((expectedArrivalMs - detailNow) / 1000)) : 0;
+    const activeGuardians = contacts.filter((contact) => guardianPhones.includes(contact.phone));
 
     return (
       <div className="space-y-3.5 animate-in fade-in slide-in-from-right-4 min-h-[80vh] pb-8">
@@ -242,9 +359,9 @@ export function SharedSessionsPage({
             <span className="text-[11px] font-bold">Back to Shared Feeds</span>
           </button>
 
-          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full bg-yellow-400 text-black text-[10px] font-black uppercase tracking-wider">
+          <span className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${statusLabel === "SAFE" ? "bg-emerald-500 text-white" : isOverdue ? "bg-red-600 text-white" : "bg-yellow-400 text-black"}`}>
             <Radio className="w-3 h-3 animate-pulse" />
-            <span>{activeDetailSession.status === "active" ? "Live Journey" : activeDetailSession.status}</span>
+            <span>{statusLabel}</span>
           </span>
         </div>
 
@@ -260,20 +377,15 @@ export function SharedSessionsPage({
             </div>
             <div>
               <span className="text-[9px] font-black uppercase text-yellow-400 tracking-wider">
-                Guardian Member
+                {isSender ? "Sender View" : "Guardian View"}
               </span>
-              <h3 className="text-base font-black text-white leading-tight">{ownerName}</h3>
-              <p className="text-[10px] font-mono text-zinc-400">{activeDetailSession.user_phone}</p>
+              <h3 className="text-base font-black text-white leading-tight">
+                {isSender ? "Your Active Safety Watch" : `Monitoring ${ownerName}'s Journey`}
+              </h3>
+              {!isSender && <p className="text-[10px] font-mono text-zinc-400">{activeDetailSession.user_phone}</p>}
             </div>
           </div>
 
-          <a
-            href={`tel:${activeDetailSession.user_phone}`}
-            className="p-2.5 rounded-xl bg-yellow-400 text-black font-black active:scale-90 transition-all shadow-xs shrink-0"
-            title="Call Friend"
-          >
-            <Phone className="w-4 h-4 fill-black" />
-          </a>
         </div>
 
         {/* Destination & ETA Info Card */}
@@ -305,8 +417,42 @@ export function SharedSessionsPage({
           </div>
         </div>
 
+        {isSender && activeDetailSession.status === "active" && (
+          <section className="space-y-3 rounded-2xl border border-yellow-400/50 bg-yellow-400/10 p-4">
+            <div className="text-center">
+              <p className="text-[10px] font-black uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Time until expected arrival</p>
+              <p className="font-mono text-4xl font-black text-yellow-500" aria-live="polite">
+                {countdownSeconds > 0 ? formatCountdown(countdownSeconds) : "OVERDUE"}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void confirmSafe(activeDetailSession)}
+              className="w-full rounded-xl bg-yellow-400 py-3.5 text-sm font-black text-black active:scale-[0.98]"
+            >
+              Confirm I’m Safe
+            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => void extendSession(activeDetailSession)}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-300 dark:border-zinc-700 py-3 text-xs font-bold text-black dark:text-white"
+              >
+                <Plus className="h-4 w-4" /> Extend 15 min
+              </button>
+              <button
+                type="button"
+                onClick={() => void endSession(activeDetailSession)}
+                className="rounded-xl bg-red-600 py-3 text-xs font-bold text-white"
+              >
+                End Session
+              </button>
+            </div>
+          </section>
+        )}
+
         {/* Live Map Frame */}
-        <div className="space-y-1.5">
+        <div ref={mapSectionRef} className="space-y-1.5 scroll-mt-4">
           <div className="flex items-center justify-between px-1">
             <h4 className="text-[10px] font-black uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center space-x-1">
               <MapPin className="w-3 h-3 text-yellow-400" />
@@ -331,7 +477,7 @@ export function SharedSessionsPage({
           ) : (
             <div className="h-36 rounded-2xl bg-zinc-200/60 dark:bg-zinc-900/60 border border-zinc-300/40 dark:border-zinc-800 flex flex-col items-center justify-center p-3 text-center space-y-1.5">
               <Navigation className="w-6 h-6 text-zinc-400 animate-bounce" />
-              <p className="text-[11px] font-bold text-zinc-500">Waiting for friend's GPS updates...</p>
+              <p className="text-[11px] font-bold text-zinc-500">Waiting for friend&apos;s GPS updates...</p>
             </div>
           )}
         </div>
@@ -358,21 +504,39 @@ export function SharedSessionsPage({
           </div>
         </div>
 
-        {/* Participants */}
-        <div className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 p-2.5 rounded-xl text-xs space-y-1">
-          <p className="text-[9px] font-black uppercase text-zinc-400 flex items-center space-x-1">
-            <Users className="w-3 h-3 text-yellow-400" />
-            <span>Shared Participants</span>
-          </p>
-          <p className="font-semibold text-[11px] text-black dark:text-white">
-            {getSessionParticipantNames(
-              activeDetailSession,
-              contacts,
-              userPhone,
-              ownerName
-            ).join(", ")}
-          </p>
-        </div>
+        {isSender ? (
+          <section className="space-y-2 rounded-xl border border-zinc-200/70 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 p-3">
+            <h4 className="flex items-center gap-2 text-xs font-black text-black dark:text-white">
+              <Users className="h-4 w-4 text-yellow-400" /> Guardians receiving this watch
+            </h4>
+            {activeGuardians.length > 0 ? (
+              <ul className="space-y-1.5">
+                {activeGuardians.map((guardian) => (
+                  <li key={guardian.id} className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-black dark:text-white">{guardian.name}</span>
+                    <span className="font-mono text-zinc-500">{guardian.phone}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : guardianPhones.length > 0 ? (
+              <ul className="space-y-1.5">
+                {guardianPhones.map((phone) => <li key={phone} className="font-mono text-xs text-zinc-500">{phone}</li>)}
+              </ul>
+            ) : (
+              <p className="text-[11px] text-zinc-500">No guardians are attached to this session.</p>
+            )}
+          </section>
+        ) : (
+          <div className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 p-2.5 rounded-xl text-xs space-y-1">
+            <p className="text-[9px] font-black uppercase text-zinc-400 flex items-center space-x-1">
+              <Users className="w-3 h-3 text-yellow-400" />
+              <span>Shared Participants</span>
+            </p>
+            <p className="font-semibold text-[11px] text-black dark:text-white">
+              {getSessionParticipantNames(activeDetailSession, contacts, userPhone, ownerName).join(", ")}
+            </p>
+          </div>
+        )}
 
         {/* Guardian Note */}
         {activeDetailSession.notes && (
@@ -385,14 +549,32 @@ export function SharedSessionsPage({
           </div>
         )}
 
-        {/* Action Button */}
-        <a
-          href={`tel:${activeDetailSession.user_phone}`}
-          className="w-full bg-black dark:bg-white text-white dark:text-black font-black py-3 rounded-xl text-xs flex items-center justify-center space-x-2 active:scale-95 transition-all shadow-md"
-        >
-          <Phone className="w-3.5 h-3.5 fill-current" />
-          <span>Call {ownerName} Immediately</span>
-        </a>
+        {!isSender && (
+          <section className="space-y-2">
+            <a
+              href={`tel:${activeDetailSession.user_phone}`}
+              className="w-full bg-black dark:bg-white text-white dark:text-black font-black py-3.5 rounded-xl text-xs flex items-center justify-center space-x-2 active:scale-95 transition-all shadow-md"
+            >
+              <Phone className="w-4 h-4 fill-current" />
+              <span>Call {ownerName}</span>
+            </a>
+            <button
+              type="button"
+              onClick={() => void shareEmergencyDetails(activeDetailSession, ownerName)}
+              className="w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 py-3.5 text-xs font-black text-black dark:text-white"
+            >
+              Share Emergency Details
+            </button>
+            {shareFeedback && <p role="status" className="text-center text-[11px] font-bold text-emerald-600">{shareFeedback}</p>}
+            <button
+              type="button"
+              onClick={() => mapSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              className="w-full rounded-xl bg-yellow-400 py-3.5 text-xs font-black text-black"
+            >
+              View Last Known GPS Location
+            </button>
+          </section>
+        )}
       </div>
     );
   }
