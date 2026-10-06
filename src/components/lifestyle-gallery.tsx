@@ -114,7 +114,7 @@ export function LifestyleGallery() {
               Late Commute
             </div>
             <h3 className="text-xs sm:text-xl font-extrabold text-white leading-tight">
-              Know you made it home.
+              They know you made it home.
             </h3>
 
             <div className="bg-zinc-950/90 border border-zinc-800 p-2 sm:p-3 rounded-xl sm:rounded-2xl flex items-center justify-between text-[9px] sm:text-xs">

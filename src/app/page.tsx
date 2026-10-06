@@ -172,8 +172,8 @@ export default function Home() {
             </div>
 
             <div className="relative w-full overflow-hidden">
-              <div className="absolute left-0 top-0 bottom-0 w-16 bg-gradient-to-r from-white dark:from-black to-transparent z-10 pointer-events-none" />
-              <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-white dark:from-black to-transparent z-10 pointer-events-none" />
+              <div className="absolute left-0 top-0 bottom-0 w-16 bg-linear-to-r from-white dark:from-black to-transparent z-10 pointer-events-none" />
+              <div className="absolute right-0 top-0 bottom-0 w-16 bg-linear-to-l from-white dark:from-black to-transparent z-10 pointer-events-none" />
 
               <div className="animate-marquee flex items-center space-x-6 py-4">
                 {[...HOW_IT_WORKS_STEPS, ...HOW_IT_WORKS_STEPS].map((step, idx) => (
@@ -193,50 +193,54 @@ export default function Home() {
         </ScrollReveal>
 
         {/* Founder Story Section */}
-        <ScrollReveal>
-          <section id="story" className="max-w-2xl mx-auto px-6 text-center space-y-6 pt-6">
-            <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-zinc-100 dark:border-zinc-800 shadow-md mx-auto bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center">
-              <img
-                src="/founder.jpg"
-                alt="Founder of Déloci"
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  e.currentTarget.style.display = "none";
-                }}
-              />
-              <Shield className="w-10 h-10 text-yellow-400" />
-            </div>
+<ScrollReveal>
+  <section id="story" className="max-w-2xl mx-auto px-6 text-center space-y-6 pt-6">
+    <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-zinc-100 dark:border-zinc-800 shadow-md mx-auto bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center">
+      <img
+        src="/founders.png"
+        alt="Founder of Déloci"
+        className="w-full h-full object-cover"
+        onError={(e) => {
+          e.currentTarget.style.display = "none";
+        }}
+      />
+      <Shield className="w-10 h-10 text-yellow-400" />
+    </div>
 
-            <div>
-              <span className="inline-flex items-center gap-1.5 bg-rose-50 dark:bg-rose-950/40 text-rose-500 dark:text-rose-400 font-bold text-xs px-3.5 py-1 rounded-full border border-rose-100 dark:border-rose-900/30">
-                <Heart className="w-3.5 h-3.5 fill-current" />
-                <span>made with love for safer journeys</span>
-              </span>
-            </div>
+    <div>
+      <span className="inline-flex items-center gap-1.5 bg-rose-50 dark:bg-rose-950/40 text-rose-500 dark:text-rose-400 font-bold text-xs px-3.5 py-1 rounded-full border border-rose-100 dark:border-rose-900/30">
+        <Heart className="w-3.5 h-3.5 fill-current" />
+        <span>made with love for safer journeys</span>
+      </span>
+    </div>
 
-            <h2 className="text-2xl sm:text-3xl font-extrabold text-black dark:text-white tracking-tight lowercase">
-              why i built déloci
-            </h2>
+    <h2 className="text-2xl sm:text-3xl font-extrabold text-black dark:text-white tracking-tight lowercase">
+      why we built déloci
+    </h2>
 
-            <div className="space-y-4 text-sm sm:text-base font-normal text-zinc-600 dark:text-zinc-300 leading-relaxed lowercase text-center max-w-xl mx-auto">
-              <p>
-                after late nights walking home and solo travels where family and friends were constantly asking for "text me when you arrive" updates, i realized how stressful staying safe and keeping loved ones reassured can be.
-              </p>
+    <div className="space-y-4 text-sm sm:text-base font-normal text-zinc-600 dark:text-zinc-300 leading-relaxed lowercase text-center max-w-xl mx-auto">
+      <p>
+        we constantly hear alarming stories of missing persons, sudden disappearances, and late‑night emergencies. whether it’s moving to a new city, meeting someone new for the first time, or heading out alone, the uncertainty and worry felt by relatives, friends, and loved ones watching from afar can be overwhelming.
+      </p>
 
-              <p>
-                moving freely and exploring new places is one of the most beautiful things in life. it creates core memories and deep peace of mind. i wanted to make the process of staying safe and checking in <strong className="font-extrabold text-black dark:text-white">more efficient, safe, and reassuring</strong> — so more people could experience full freedom without fear.
-              </p>
+      <p>
+        connecting with new people and stepping out should bring excitement, not fear. i wanted to build a way for anyone to step into any situation — from late commutes to first dates — knowing that their <strong className="font-extrabold text-black dark:text-white">trusted circle is silently watching over them</strong>, ready to be alerted the exact moment something feels off.
+      </p>
 
-              <p>
-                i dedicated myself to building this app fueled by the belief that <strong className="font-extrabold text-black dark:text-white">no one should ever have to walk home alone in fear unless they want to.</strong>
-              </p>
+      <p>
+        with déloci, you share your live location and where you’re going with the people you trust. if you don’t check in as expected, <strong className="font-extrabold text-black dark:text-white">they’re alerted automatically — even if you can’t reach for your phone.</strong> you control who sees what, and only the people you choose are notified when it matters.
+      </p>
 
-              <p className="font-bold text-black dark:text-white pt-2">
-                — founder, déloci 🫶
-              </p>
-            </div>
-          </section>
-        </ScrollReveal>
+      <p>
+        we dedicated myself to creating déloci to offer real reassurance to distant loved ones and help ensure that when something goes wrong, the right people know fast.
+      </p>
+
+      <p className="font-bold text-black dark:text-white pt-2">
+        — founder, déloci 🫶
+      </p>
+    </div>
+  </section>
+</ScrollReveal>
 
         <ScrollReveal>
           <section id="install" className="max-w-6xl mx-auto px-6">
