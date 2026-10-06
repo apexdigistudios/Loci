@@ -36,8 +36,24 @@ create table if not exists public.checkin_sessions (
   current_lat double precision,
   current_lng double precision,
   target_group text,
+  user_reminder_mins integer not null default 15,
+  contact_reminder_mins integer not null default 30,
+  last_user_checkin_at timestamptz not null default now(),
+  last_user_reminder_sent_at timestamptz,
+  session_started_push_sent_at timestamptz,
+  session_completed_push_sent_at timestamptz,
+  guardian_alert_sent_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+alter table public.checkin_sessions
+  add column if not exists user_reminder_mins integer not null default 15,
+  add column if not exists contact_reminder_mins integer not null default 30,
+  add column if not exists last_user_checkin_at timestamptz not null default now(),
+  add column if not exists last_user_reminder_sent_at timestamptz,
+  add column if not exists session_started_push_sent_at timestamptz,
+  add column if not exists session_completed_push_sent_at timestamptz,
+  add column if not exists guardian_alert_sent_at timestamptz;
 
 create table if not exists public.session_recipients (
   id uuid primary key default gen_random_uuid(),

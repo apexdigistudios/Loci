@@ -19,9 +19,11 @@ export const metadata: Metadata = {
   description: "Share your journey safely with trusted contacts.",
   manifest: "/manifest.json",
   icons: {
-    icon: "/icon-192.png",
-    shortcut: "/icon-192.png",
-    apple: "/apple-touch-icon.png",
+    icon: [
+      { url: "/icon.png", sizes: "512x512", type: "image/png" },
+      { url: "/favicon.ico" },
+    ],
+    apple: "/apple-icon.png",
   },
   openGraph: {
     title: "Déloci — Consent-Based Safety Check-Ins",
@@ -30,7 +32,7 @@ export const metadata: Metadata = {
     siteName: "Déloci",
     images: [
       {
-        url: "https://deloci.online/icon-512.png",
+        url: "https://deloci.online/icon.png",
         width: 512,
         height: 512,
         alt: "Déloci Logo",
@@ -75,7 +77,7 @@ export default function RootLayout({
               "@type": "Organization",
               name: "Déloci",
               url: "https://deloci.online",
-              logo: "https://deloci.online/icon-512.png",
+              logo: "https://deloci.online/icon.png",
             }),
           }}
         />

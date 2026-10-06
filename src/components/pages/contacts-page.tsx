@@ -14,8 +14,14 @@ import {
   Shield,
   UserCheck,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { SharedSessionsPage } from "./shared-sessions-page";
+
+interface DeviceContactPicker {
+  select: (
+    properties: Array<"name" | "tel">,
+    options: { multiple: boolean }
+  ) => Promise<Array<{ name?: string[]; tel?: string[] }>>;
+}
 
 export interface Contact {
   id: string;
@@ -43,9 +49,8 @@ interface ContactsPageProps {
   setManualName: (v: string) => void;
   manualPhone: string;
   setManualPhone: (v: string) => void;
-  handleAddManualContact: (e: React.FormEvent, selectedGroup?: string) => void;
+  handleAddManualContact: (selectedGroup?: string, contact?: { name: string; phone: string }) => Promise<boolean>;
   handleDeleteContact: (id: string) => void;
-  onContactAdded?: (contact: Contact) => void;
 }
 
 const DEFAULT_GROUPS = [
@@ -90,7 +95,6 @@ export function ContactsPage({
   setManualPhone,
   handleAddManualContact,
   handleDeleteContact,
-  onContactAdded,
 }: ContactsPageProps) {
   const [subTab, setSubTab] = useState<"contacts" | "shared">(
     () => (openSessionId ? "shared" : "contacts")
@@ -103,6 +107,7 @@ export function ContactsPage({
   const [customGroupInput, setCustomGroupInput] = useState("");
   const [customGroupImage, setCustomGroupImage] = useState<string | null>(null);
   const [showCustomGroupField, setShowCustomGroupField] = useState(false);
+  const [pendingContact, setPendingContact] = useState<{ name: string; phone: string } | null>(null);
 
   // Persistent Custom Groups State
   const [customGroups, setCustomGroups] = useState<CustomGroup[]>(() => {
@@ -122,13 +127,27 @@ export function ContactsPage({
   const [importing, setImporting] = useState(false);
   const groupImageInputRef = useRef<HTMLInputElement>(null);
 
+  const normalizePhone = (phone: string) => {
+    const stripped = phone.replace(/[\s\-\(\)]/g, "");
+    if (stripped.startsWith("+")) return `+${stripped.slice(1).replace(/\D/g, "")}`;
+    const digits = stripped.replace(/\D/g, "");
+    if (digits.startsWith("233")) return `+${digits}`;
+    if (digits.startsWith("0")) return `+233${digits.slice(1)}`;
+    return `+233${digits}`;
+  };
+
+  const formatPhonePreview = (phone: string) => phone.startsWith("+233") && phone.length === 13
+    ? `+233 ${phone.slice(4, 6)} ${phone.slice(6, 9)} ${phone.slice(9)}`
+    : phone;
+
   const handleAutoPickContacts = async () => {
     setImporting(true);
 
-    if (typeof window !== "undefined" && "contacts" in navigator && "ContactsManager" in window) {
+    if (typeof window !== "undefined" && "contacts" in navigator) {
       try {
-        const props = ["name", "tel"];
-        const selectedContacts = await (navigator as any).contacts.select(props, { multiple: false });
+        const props: Array<"name" | "tel"> = ["name", "tel"];
+        const picker = (navigator as Navigator & { contacts: DeviceContactPicker }).contacts;
+        const selectedContacts = await picker.select(props, { multiple: false });
 
         if (selectedContacts && selectedContacts.length > 0) {
           const picked = selectedContacts[0];
@@ -136,23 +155,7 @@ export function ContactsPage({
           const phone = picked.tel?.[0] || "";
 
           if (phone) {
-            const { data, error } = await supabase
-              .from("trusted_contacts")
-              .insert({
-                user_phone: userPhone,
-                name: name,
-                phone: phone,
-                group_category: selectedGroup,
-              })
-              .select()
-              .single();
-
-            if (!error && data) {
-              if (onContactAdded) onContactAdded(data);
-              setImporting(false);
-              setShowAddModal(false);
-              return;
-            }
+            setPendingContact({ name, phone: normalizePhone(phone) });
           }
         }
       } catch (err) {
@@ -211,8 +214,17 @@ export function ContactsPage({
 
   const submitManualWithGroup = (e: React.FormEvent) => {
     e.preventDefault();
-    handleAddManualContact(e, selectedGroup);
-    setShowAddModal(false);
+    if (!manualName.trim() || !manualPhone.trim()) return;
+    setPendingContact({ name: manualName.trim(), phone: normalizePhone(manualPhone) });
+  };
+
+  const confirmPendingContact = async () => {
+    if (!pendingContact) return;
+    const saved = await handleAddManualContact(selectedGroup, pendingContact);
+    if (saved) {
+      setPendingContact(null);
+      setShowAddModal(false);
+    }
   };
 
   const allGroups = [
@@ -588,7 +600,7 @@ export function ContactsPage({
                       required
                       placeholder="Phone (+233...)"
                       value={manualPhone}
-                      onChange={(e) => setManualPhone(e.target.value)}
+                      onChange={(e) => setManualPhone(e.target.value.replace(/[\s\-\(\)]/g, ""))}
                       className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-yellow-400"
                     />
                     <button
@@ -599,7 +611,7 @@ export function ContactsPage({
                       {addingContact ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
                       ) : (
-                        <span>Save to {selectedGroup}</span>
+                        <span>Review phone number</span>
                       )}
                     </button>
                   </form>
@@ -608,6 +620,41 @@ export function ContactsPage({
             </div>
           )}
         </>
+      )}
+
+      {pendingContact && (
+        <div className="fixed inset-0 z-110 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center">
+          <div className="w-full max-w-sm space-y-5 rounded-2xl border border-zinc-700 bg-zinc-900 p-6 text-white shadow-2xl">
+            <div className="space-y-1">
+              <h3 className="text-sm font-extrabold">Confirm Phone Number</h3>
+              <p className="text-xs text-zinc-400">{pendingContact.name}</p>
+            </div>
+            <p className="rounded-xl bg-black px-4 py-4 text-center font-mono text-lg font-bold text-yellow-400">
+              {formatPhonePreview(pendingContact.phone)}
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setManualName(pendingContact.name);
+                  setManualPhone(pendingContact.phone);
+                  setPendingContact(null);
+                }}
+                className="rounded-xl border border-zinc-700 py-3 text-xs font-bold text-zinc-300"
+              >
+                Edit number
+              </button>
+              <button
+                type="button"
+                onClick={confirmPendingContact}
+                disabled={addingContact}
+                className="rounded-xl bg-yellow-400 py-3 text-xs font-extrabold text-black disabled:opacity-50"
+              >
+                {addingContact ? "Saving..." : "Confirm & Save"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* SUBVIEW 2: SHARED SESSIONS FULL PAGE DELEGATE */}

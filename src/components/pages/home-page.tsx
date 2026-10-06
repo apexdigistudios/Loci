@@ -17,6 +17,8 @@ interface ActiveSession {
   destination: string;
   expected_arrival_at: string;
   status: "active" | "completed" | "missed" | "escalated";
+  user_reminder_mins?: number;
+  last_user_checkin_at?: string;
   notes?: string | null;
 }
 
@@ -41,6 +43,7 @@ interface HomePageProps {
   contactsSupported: boolean;
   handlePickDeviceContact: () => void;
   handleCompleteSession: () => void;
+  handleSafeCheckin: () => void;
   onNavigate: (tab: "home" | "session" | "contacts" | "share" | "profile") => void;
 }
 
@@ -56,12 +59,14 @@ export function HomePage({
   contactsSupported,
   handlePickDeviceContact,
   handleCompleteSession,
+  handleSafeCheckin,
   onNavigate,
 }: HomePageProps) {
   const circleSessions = receivedSessions.filter(
     (session) => cleanPhone(session.user_phone) !== cleanPhone(currentUserPhone)
   );
   const [remainingSeconds, setRemainingSeconds] = useState(0);
+  const [now, setNow] = useState(0);
 
   useEffect(() => {
     if (!activeSession) return;
@@ -71,6 +76,7 @@ export function HomePage({
         (new Date(activeSession.expected_arrival_at).getTime() - Date.now()) / 1000
       );
       setRemainingSeconds(Math.max(0, secondsLeft));
+      setNow(Date.now());
     };
 
     updateRemainingTime();
@@ -207,6 +213,17 @@ export function HomePage({
               <p className="text-xs font-semibold mt-1">{activeSession.notes}</p>
             </div>
           )}
+
+          {now - new Date(activeSession.last_user_checkin_at || activeSession.expected_arrival_at).getTime() >=
+            (activeSession.user_reminder_mins || 15) * 60000 && (
+              <button
+                type="button"
+                onClick={handleSafeCheckin}
+                className="w-full bg-white text-black border-2 border-black font-black py-4 rounded-2xl text-sm shadow-lg active:scale-[0.97]"
+              >
+                Confirm I’m Safe
+              </button>
+            )}
 
           <button
             onClick={handleCompleteSession}
