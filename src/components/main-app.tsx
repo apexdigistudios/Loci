@@ -8,6 +8,12 @@ import { cleanPhone } from "@/lib/utils";
 import { requestNotificationPermission, type NotificationPermissionResult } from "@/lib/notifications";
 import { sendPushTestNotification, subscribeUserToPush } from "@/lib/push-notifications";
 import { prepareAlertFeedback } from "@/lib/alerts";
+import {
+  onSessionStarted,
+  onSenderCheckedIn,
+  onSessionEnded,
+  onSessionOverdue,
+} from "@/lib/session-notifications";
 
 import { HomePage } from "@/components/pages/home-page";
 import { SessionPage } from "@/components/pages/session-page";
@@ -99,7 +105,9 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const [requestedSharedSessionId, setRequestedSharedSessionId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const { theme, resolvedTheme } = useTheme();
+
   const notificationPermissionRequestRef = useRef<Promise<NotificationPermissionResult> | null>(null);
+  const overdueAlertSentRef = useRef<string | null>(null);
 
   const ensureNotificationPermission = useCallback(async (): Promise<NotificationPermissionResult> => {
     if (typeof window === "undefined" || !("Notification" in window)) return "unsupported";
@@ -236,6 +244,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         .select("id, user_phone, destination, expected_arrival_at, status, notes, user_reminder_mins, contact_reminder_mins, last_user_checkin_at")
         .eq("status", "active")
         .order("created_at", { ascending: false });
+
       const sessionData = activeSessionRows?.find((session) =>
         cleanPhone(session.user_phone) === cleanPhone(userPhone)
       );
@@ -273,6 +282,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     const contactPhones = new Set(contacts
       .map((contact) => cleanPhone(contact.phone))
       .filter((phone) => phone && phone !== cleanPhone(userPhone)));
+
     const [{ data: sessions, error }, { data: recipients, error: recipientError }] = await Promise.all([
       supabase
         .from("checkin_sessions")
@@ -297,6 +307,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         cleanPhone(recipient.contact_phone) === currentPhone
       )
       .map((recipient) => recipient.session_id));
+
     const receivedSessions = sessions.filter((session) => {
       const ownerPhone = cleanPhone(session.user_phone);
       return ownerPhone !== currentPhone && (contactPhones.has(ownerPhone) || recipientSessionIds.has(session.id));
@@ -328,7 +339,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     return () => clearTimeout(timer);
   }, [fetchReceivedSessions]);
 
-  // Realtime updates refresh feeds only; push dispatch is handled server-side.
   useEffect(() => {
     const contactPhones = new Set(contacts
       .map((contact) => cleanPhone(contact.phone))
@@ -376,6 +386,27 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     };
   }, [activeSession]);
 
+  // --- OVERDUE CHECKER FOR RECEIVER GUARDIAN ALERTS ---
+  useEffect(() => {
+    if (!activeSession || activeSession.status !== "active") return;
+
+    const checkOverdueAlert = () => {
+      const now = Date.now();
+      const expectedTime = new Date(activeSession.expected_arrival_at).getTime();
+
+      if (now > expectedTime && overdueAlertSentRef.current !== activeSession.id) {
+        overdueAlertSentRef.current = activeSession.id;
+        const senderDisplayName = nickname || fullName || "Your friend";
+        const contactPhones = contacts.map((c) => c.phone);
+        void onSessionOverdue(senderDisplayName, activeSession.destination, contactPhones);
+      }
+    };
+
+    checkOverdueAlert();
+    const overdueInterval = setInterval(checkOverdueAlert, 10000);
+    return () => clearInterval(overdueInterval);
+  }, [activeSession, contacts, fullName, nickname]);
+
   const toggleContactSelection = (id: string) => {
     setSelectedContactIds((prev) =>
       prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
@@ -411,6 +442,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     setActiveTab("session");
     setSessionLoading(true);
 
+    const selectedContacts = contacts.filter((contact) => selectedContactIds.includes(contact.id));
+    const targetPhones = selectedContacts.length > 0
+      ? selectedContacts.map((c) => c.phone)
+      : contacts.map((c) => c.phone);
+
+    const senderDisplayName = nickname || fullName || "Your friend";
+    void onSessionStarted(senderDisplayName, destName, targetPhones);
+
     try {
       const { data, error } = await supabase
         .from("checkin_sessions")
@@ -432,7 +471,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
       if (!error && data) {
         setActiveSession(data);
-        const selectedContacts = contacts.filter((contact) => selectedContactIds.includes(contact.id));
         if (selectedContacts.length > 0) {
           const { error: recipientsError } = await supabase
             .from("session_recipients")
@@ -459,6 +497,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const handleSafeCheckin = async () => {
     if (!activeSession) return;
     const checkedInAt = new Date().toISOString();
+
     if (!activeSession.id.startsWith("local-")) {
       const { error } = await supabase
         .from("checkin_sessions")
@@ -470,11 +509,16 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         return;
       }
     }
+
     const updatedSession = { ...activeSession, last_user_checkin_at: checkedInAt };
     setActiveSession(updatedSession);
     if (typeof window !== "undefined") {
       localStorage.setItem("loci_active_session", JSON.stringify(updatedSession));
     }
+
+    const senderDisplayName = nickname || fullName || "Your friend";
+    const targetPhones = contacts.map((c) => c.phone);
+    void onSenderCheckedIn(senderDisplayName, targetPhones);
   };
 
   const handleCompleteSession = async () => {
@@ -483,6 +527,10 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     if (typeof window !== "undefined") {
       localStorage.removeItem("loci_active_session");
     }
+
+    const senderDisplayName = nickname || fullName || "Your friend";
+    const targetPhones = contacts.map((c) => c.phone);
+    void onSessionEnded(senderDisplayName, targetPhones);
 
     if (currentId && !currentId.startsWith("local-")) {
       setSessionLoading(true);
