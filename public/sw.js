@@ -1,7 +1,7 @@
 self.addEventListener("push", (event) => {
   if (!event.data) return;
 
-  let payload = { title: "Déloci Alert", body: "Safety check-in notification", url: "/" };
+  let payload = { title: "Déloci Alert", body: "Safety check-in notification", url: "/", tag: "loci-alert" };
   try {
     payload = event.data.json();
   } catch (e) {
@@ -12,10 +12,13 @@ self.addEventListener("push", (event) => {
     body: payload.body,
     icon: "/icon-192.png",
     badge: "/icon-192.png",
+    vibrate: [200, 100, 200, 100, 200],
+    tag: payload.tag || "loci-alert",
+    renotify: true,
     data: { url: payload.url || "/" },
   };
 
-  event.waitUntil(self.registration.showNotification(payload.title, options));
+  event.waitUntil(self.registration.showNotification(payload.title || "Déloci Alert", options));
 });
 
 self.addEventListener("notificationclick", (event) => {

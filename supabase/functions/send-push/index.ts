@@ -33,11 +33,24 @@ serve(async (req) => {
     });
 
     const body = await req.json();
-    const { action, user_id } = body;
+    let action = body.action;
+
+    // Normalize user ID inputs (supports single string or array of IDs via userIds / user_id)
+    const rawUserIds = body.userIds || body.user_id;
+    const targetUserIds: string[] = Array.isArray(rawUserIds)
+      ? rawUserIds
+      : rawUserIds
+      ? [rawUserIds]
+      : [];
+
+    // Default action to "send" if target users are passed without explicit action
+    if (!action && targetUserIds.length > 0) {
+      action = "send";
+    }
 
     // 1. SUBSCRIBE ACTION
     if (action === "subscribe") {
-      const { endpoint, p256dh, auth, device_info } = body;
+      const { user_id, endpoint, p256dh, auth, device_info } = body;
 
       if (!user_id || !endpoint || !p256dh || !auth) {
         return new Response(
@@ -76,12 +89,20 @@ serve(async (req) => {
         );
       }
 
+      if (targetUserIds.length === 0) {
+        return new Response(
+          JSON.stringify({ error: "Missing target user ID(s) in request body" }),
+          { status: 400, headers: corsHeaders }
+        );
+      }
+
       webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
 
+      // Query active push subscriptions across all target user IDs
       const { data: subscriptions, error } = await supabaseAdmin
         .from("user_push_subscriptions")
         .select("*")
-        .eq("user_id", user_id)
+        .in("user_id", targetUserIds)
         .eq("is_active", true);
 
       if (error) {
@@ -93,7 +114,7 @@ serve(async (req) => {
 
       if (!subscriptions || subscriptions.length === 0) {
         return new Response(
-          JSON.stringify({ error: "No active subscriptions found for this user" }),
+          JSON.stringify({ error: "No active subscriptions found for target user(s)", delivered: 0 }),
           { status: 404, headers: corsHeaders }
         );
       }
@@ -102,6 +123,7 @@ serve(async (req) => {
         title: body.title || "Déloci Alert",
         body: body.body || "Safety check-in notification",
         url: body.url || "/",
+        tag: body.tag || "loci-alert",
       });
 
       const rawResults = await Promise.allSettled(
@@ -110,16 +132,27 @@ serve(async (req) => {
             endpoint: sub.endpoint,
             keys: { p256dh: sub.p256dh, auth: sub.auth },
           };
-          return webpush.sendNotification(pushSubscription, payload);
+          try {
+            return await webpush.sendNotification(pushSubscription, payload);
+          } catch (err: any) {
+            // Automatically deactivate stale or expired subscriptions (410 Gone / 404 Not Found)
+            if (err.statusCode === 410 || err.statusCode === 404) {
+              await supabaseAdmin
+                .from("user_push_subscriptions")
+                .update({ is_active: false })
+                .eq("id", sub.id);
+            }
+            throw err;
+          }
         })
       );
 
       const formattedResults = rawResults.map((r) => ({
         ok: r.status === "fulfilled",
-        status: r.status === "fulfilled" ? 201 : 500,
-        statusCode: r.status === "fulfilled" ? 201 : 500,
+        status: r.status === "fulfilled" ? 201 : r.reason?.statusCode || 500,
+        statusCode: r.status === "fulfilled" ? 201 : r.reason?.statusCode || 500,
         value: r.status === "fulfilled" ? r.value : null,
-        reason: r.status === "rejected" ? r.reason : null,
+        reason: r.status === "rejected" ? r.reason?.message || String(r.reason) : null,
       }));
 
       const successfulCount = formattedResults.filter((r) => r.ok).length;
@@ -128,6 +161,7 @@ serve(async (req) => {
         JSON.stringify({
           success: true,
           count: successfulCount,
+          delivered: successfulCount,
           results: formattedResults,
         }),
         { status: 200, headers: corsHeaders }
