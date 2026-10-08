@@ -34,8 +34,8 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: npm run build
 
-      - name: Ensure web assets directory exists
-        run: cp -r out www || mkdir -p www
+      - name: Verify Next.js static export output
+        run: test -d out
 
       - name: Sync Capacitor Android
         run: npx --yes @capacitor/cli sync android
