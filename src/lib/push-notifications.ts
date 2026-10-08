@@ -69,8 +69,11 @@ export async function subscribeUserToPush(userId: string): Promise<SubscriptionR
       return { ok: false, reason: "Invalid browser subscription keys" };
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-key";
+    if (supabaseUrl === "https://placeholder.supabase.co" || anonKey === "placeholder-key") {
+      return { ok: false, reason: "Missing Supabase configuration" };
+    }
 
     const response = await fetch(`${supabaseUrl}/functions/v1/send-push`, {
       method: "POST",
@@ -110,8 +113,11 @@ export async function sendTestPushNotification(userId: string): Promise<TestPush
   }
 
   // 2. Dispatch the test push
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-key";
+  if (supabaseUrl === "https://placeholder.supabase.co" || anonKey === "placeholder-key") {
+    return { ok: false, reason: "Missing Supabase configuration" };
+  }
 
   try {
     const response = await fetch(`${supabaseUrl}/functions/v1/send-push`, {

@@ -63,9 +63,9 @@ export async function sendPushAlert(
   const targetIds = Array.isArray(userIds) ? userIds.filter(Boolean) : [userIds];
   if (targetIds.length === 0) return;
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !anonKey) return;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-key";
+  if (supabaseUrl === "https://placeholder.supabase.co" || anonKey === "placeholder-key") return;
 
   try {
     // Send batch array payload in a single HTTP request for instant execution
