@@ -56,7 +56,8 @@ export function triggerAlertFeedback() {
 export async function sendPushAlert(
   userIds: string | string[],
   title: string,
-  message: string
+  message: string,
+  url: string = "/"
 ) {
   if (!userIds) return;
   const targetIds = Array.isArray(userIds) ? userIds.filter(Boolean) : [userIds];
@@ -67,24 +68,22 @@ export async function sendPushAlert(
   if (!supabaseUrl || !anonKey) return;
 
   try {
-    await Promise.all(
-      targetIds.map((id) =>
-        fetch(`${supabaseUrl}/functions/v1/send-push`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${anonKey}`,
-          },
-          body: JSON.stringify({
-            action: "send",
-            user_id: id,
-            title,
-            body: message,
-            url: "/",
-          }),
-        })
-      )
-    );
+    // Send batch array payload in a single HTTP request for instant execution
+    await fetch(`${supabaseUrl}/functions/v1/send-push`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${anonKey}`,
+      },
+      body: JSON.stringify({
+        action: "send",
+        userIds: targetIds,
+        title,
+        body: message,
+        url,
+        tag: "deloci-safety-alert",
+      }),
+    });
   } catch (error) {
     console.error("Failed to dispatch push alert:", error);
   }

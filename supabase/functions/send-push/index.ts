@@ -123,8 +123,16 @@ serve(async (req) => {
         title: body.title || "Déloci Alert",
         body: body.body || "Safety check-in notification",
         url: body.url || "/",
-        tag: body.tag || "loci-alert",
+        tag: body.tag || "deloci-safety-alert",
       });
+
+      // High-priority headers to prevent background throttling on Android/iOS
+      const pushOptions = {
+        headers: {
+          Urgency: "high",
+        },
+        TTL: 60, // 60 seconds delivery window for immediate safety alerts
+      };
 
       const rawResults = await Promise.allSettled(
         subscriptions.map(async (sub) => {
@@ -133,7 +141,7 @@ serve(async (req) => {
             keys: { p256dh: sub.p256dh, auth: sub.auth },
           };
           try {
-            return await webpush.sendNotification(pushSubscription, payload);
+            return await webpush.sendNotification(pushSubscription, payload, pushOptions);
           } catch (err: any) {
             // Automatically deactivate stale or expired subscriptions (410 Gone / 404 Not Found)
             if (err.statusCode === 410 || err.statusCode === 404) {

@@ -18,13 +18,15 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 }
 
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-    console.warn("Push messaging is not supported in this browser.");
+  if (typeof window === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+    console.warn("Push messaging is not supported in this browser environment.");
     return null;
   }
 
   try {
     const registration = await navigator.serviceWorker.register("/sw.js");
+    // Wait for the service worker to become fully active on mobile devices
+    await navigator.serviceWorker.ready;
     return registration;
   } catch (error) {
     console.error("Service Worker registration failed:", error);
@@ -34,7 +36,7 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
 
 export async function subscribeUserToPush(userId: string): Promise<SubscriptionResult> {
   const registration = await registerServiceWorker();
-  if (!registration) return { ok: false, reason: "Service Workers unsupported" };
+  if (!registration) return { ok: false, reason: "Service Workers or PushManager unsupported" };
 
   const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
   if (!vapidPublicKey) {
@@ -86,7 +88,7 @@ export async function subscribeUserToPush(userId: string): Promise<SubscriptionR
       }),
     });
 
-    const resData = await response.json().catch(() => ({})) as { error?: string; [key: string]: unknown };
+    const resData = (await response.json().catch(() => ({}))) as { error?: string; [key: string]: unknown };
 
     if (!response.ok || resData.error) {
       console.error("Edge function subscribe error:", resData);
@@ -120,13 +122,19 @@ export async function sendTestPushNotification(userId: string): Promise<TestPush
       },
       body: JSON.stringify({
         action: "test",
-        user_id: userId,
+        userIds: [userId],
         title: "Déloci Test Notification 🔔",
         body: "Web Push pipeline is active and working!",
+        url: "/",
+        tag: "deloci-safety-alert",
       }),
     });
 
-    const resData = await response.json().catch(() => ({})) as { error?: string; delivered?: number; [key: string]: unknown };
+    const resData = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      delivered?: number;
+      [key: string]: unknown;
+    };
 
     if (!response.ok || resData.error) {
       console.error("Test push dispatch error:", resData);

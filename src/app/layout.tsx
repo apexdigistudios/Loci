@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "../components/theme-provider";
+import { OfflineSyncProvider } from "../components/offline-sync-provider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -21,7 +22,7 @@ export const metadata: Metadata = {
   icons: {
     icon: [
       { url: "/icon.png", sizes: "512x512", type: "image/png" },
-      { url: "/favicon.ico" },
+      { url: "/icon.png" },
     ],
     apple: "/apple-icon.png",
   },
@@ -84,7 +85,9 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col bg-white dark:bg-[#0c0c0e] text-slate-900 dark:text-slate-100 transition-colors duration-200">
         <ThemeProvider attribute="class" defaultTheme="system" disableTransitionOnChange enableSystem>
-          {children}
+          <OfflineSyncProvider>
+            {children}
+          </OfflineSyncProvider>
         </ThemeProvider>
         <Script src="https://www.googletagmanager.com/gtag/js?id=G-GCDQ3CV7MY" strategy="afterInteractive" />
         <Script id="google-analytics" strategy="afterInteractive">

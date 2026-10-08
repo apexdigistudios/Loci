@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import {
   Download,
   Users,
@@ -11,6 +12,9 @@ import {
   ShieldAlert,
   Heart,
   Shield,
+  Menu,
+  X,
+  ChevronDown,
 } from "lucide-react";
 import { Hero } from "@/components/hero";
 import { LifestyleGallery } from "@/components/lifestyle-gallery";
@@ -53,12 +57,42 @@ const HOW_IT_WORKS_STEPS = [
   },
 ];
 
+const FAQS = [
+  {
+    question: "Is Déloci tracking my location all the time?",
+    answer:
+      "No. Déloci never tracks you passively in the background. Location access is active exclusively during a watch session that you explicitly initiate. Once you check in or end the session, tracking stops instantly.",
+  },
+  {
+    question: "What happens if I lose cellular connection mid-journey?",
+    answer:
+      "Déloci features an offline IndexedDB sync engine. Your session timer and check-in actions are cached locally on your device and automatically dispatched the moment connection returns.",
+  },
+  {
+    question: "Who receives alerts if I miss my check-in deadline?",
+    answer:
+      "Only the specific guardians from your trusted circle that you assigned to that active session will receive automated push notifications and status updates.",
+  },
+  {
+    question: "Do my contacts need to download Déloci to receive alerts?",
+    answer:
+      "No. When an escalation triggers, contacts receive high-priority web push alerts or secure web links allowing them to view your status without installing anything.",
+  },
+  {
+    question: "Is an App Store download required to use Déloci?",
+    answer:
+      "No app store required. Déloci is built as a Progressive Web App (PWA) that installs directly from Safari on iOS or Chrome on Android for native standalone performance.",
+  },
+];
+
 export default function Home() {
   const [isPWA, setIsPWA] = useState<boolean | null>(null);
   const [splashComplete, setSplashComplete] = useState(false);
   const [userPhone, setUserPhone] = useState<string | null>(null);
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
 
   useEffect(() => {
     // 1. Detect PWA Standalone Mode
@@ -116,6 +150,10 @@ export default function Home() {
     setUserPhone(null);
   };
 
+  const toggleFaq = (index: number) => {
+    setOpenFaqIndex(openFaqIndex === index ? null : index);
+  };
+
   // --- PWA STRICT ROUTING (Bypasses landing page entirely) ---
   if (isPWA) {
     if (!userPhone) {
@@ -133,12 +171,33 @@ export default function Home() {
       />
 
       <header className="sticky top-0 z-50 border-b border-zinc-200 dark:border-zinc-800/80 bg-white/80 dark:bg-black/80 backdrop-blur-md">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
+        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between relative">
+          {/* Left: Brand Logo */}
+          <Link href="/" className="flex items-center space-x-2">
             <img src="/loci-light.png" alt="Déloci Logo" className="h-10 w-auto object-contain shrink-0 dark:hidden" />
             <img src="/loci-dark.png" alt="Déloci Logo" className="hidden h-10 w-auto object-contain shrink-0 dark:block" />
-          </div>
+          </Link>
 
+          {/* Center: Desktop Header Navigation Links */}
+          <nav className="hidden md:flex items-center space-x-6 text-xs font-bold text-zinc-600 dark:text-zinc-400 absolute left-1/2 -translate-x-1/2">
+            <Link href="/about" className="hover:text-black dark:hover:text-white transition-colors">
+              About
+            </Link>
+            <Link href="/privacy" className="hover:text-black dark:hover:text-white transition-colors">
+              Privacy
+            </Link>
+            <Link href="/terms" className="hover:text-black dark:hover:text-white transition-colors">
+              Terms
+            </Link>
+            <Link href="/contact" className="hover:text-black dark:hover:text-white transition-colors">
+              Contact
+            </Link>
+            <a href="#faq" className="hover:text-black dark:hover:text-white transition-colors">
+              FAQ
+            </a>
+          </nav>
+
+          {/* Right: Actions & Hamburger Toggle */}
           <div className="flex items-center space-x-3">
             <ThemeToggle />
             <button
@@ -148,8 +207,60 @@ export default function Home() {
               <Download className="w-3.5 h-3.5 text-black" />
               <span>Install App</span>
             </button>
+
+            {/* Mobile Hamburger Button */}
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="md:hidden p-2 text-zinc-600 dark:text-zinc-300 hover:text-black dark:hover:text-white"
+              aria-label="Toggle menu"
+            >
+              {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
           </div>
         </div>
+
+        {/* Mobile Dropdown Navigation Drawer */}
+        {isMobileMenuOpen && (
+          <div className="md:hidden border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-black px-6 py-4 space-y-3">
+            <nav className="flex flex-col space-y-3 text-sm font-bold text-zinc-600 dark:text-zinc-400">
+              <Link
+                href="/about"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="hover:text-black dark:hover:text-white transition-colors"
+              >
+                About
+              </Link>
+              <Link
+                href="/privacy"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="hover:text-black dark:hover:text-white transition-colors"
+              >
+                Privacy
+              </Link>
+              <Link
+                href="/terms"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="hover:text-black dark:hover:text-white transition-colors"
+              >
+                Terms
+              </Link>
+              <Link
+                href="/contact"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="hover:text-black dark:hover:text-white transition-colors"
+              >
+                Contact
+              </Link>
+              <a
+                href="#faq"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="hover:text-black dark:hover:text-white transition-colors"
+              >
+                FAQ
+              </a>
+            </nav>
+          </div>
+        )}
       </header>
 
       <main className="flex-1 space-y-20 pb-20 overflow-hidden">
@@ -254,6 +365,49 @@ export default function Home() {
           </section>
         </ScrollReveal>
 
+        {/* FAQ Section */}
+        <ScrollReveal>
+          <section id="faq" className="max-w-3xl mx-auto px-6 space-y-8 pt-6">
+            <div className="text-center space-y-2">
+              <span className="text-[10px] font-black uppercase tracking-widest bg-yellow-400 text-black px-3.5 py-1.5 rounded-full shadow-sm">
+                Got Questions?
+              </span>
+              <h2 className="text-2xl sm:text-4xl font-extrabold text-black dark:text-white tracking-tight">
+                Frequently Asked Questions
+              </h2>
+            </div>
+
+            <div className="space-y-4">
+              {FAQS.map((faq, idx) => {
+                const isOpen = openFaqIndex === idx;
+                return (
+                  <div
+                    key={idx}
+                    className="border border-zinc-200 dark:border-zinc-800 rounded-2xl bg-zinc-50/50 dark:bg-zinc-900/40 overflow-hidden transition-all"
+                  >
+                    <button
+                      onClick={() => toggleFaq(idx)}
+                      className="w-full p-5 text-left flex items-center justify-between gap-4 font-bold text-sm sm:text-base text-black dark:text-white"
+                    >
+                      <span>{faq.question}</span>
+                      <ChevronDown
+                        className={`w-4 h-4 text-zinc-500 shrink-0 transition-transform duration-200 ${
+                          isOpen ? "rotate-180 text-yellow-500" : ""
+                        }`}
+                      />
+                    </button>
+                    {isOpen && (
+                      <div className="px-5 pb-5 text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed border-t border-zinc-200/60 dark:border-zinc-800/60 pt-3">
+                        {faq.answer}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </ScrollReveal>
+
         {/* Install Section - Image Matching Banner */}
         <ScrollReveal>
           <section id="install" className="max-w-3xl mx-auto px-6">
@@ -307,10 +461,14 @@ export default function Home() {
               Déloci Safety Check-In &bull; Consent-First, Automated &amp; Transparent
             </p>
 
-            <div className="flex flex-wrap items-center justify-center gap-6 text-xs font-semibold text-zinc-500 dark:text-zinc-400 pt-2">
+            <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs font-semibold text-zinc-500 dark:text-zinc-400 pt-2">
               <a href="#how-it-works" className="hover:text-black dark:hover:text-white transition-colors">How It Works</a>
               <a href="#story" className="hover:text-black dark:hover:text-white transition-colors">Our Story</a>
-              <a href="#install" className="hover:text-black dark:hover:text-white transition-colors">Install App</a>
+              <Link href="/about" className="hover:text-black dark:hover:text-white transition-colors">About</Link>
+              <Link href="/privacy" className="hover:text-black dark:hover:text-white transition-colors">Privacy</Link>
+              <Link href="/terms" className="hover:text-black dark:hover:text-white transition-colors">Terms</Link>
+              <Link href="/contact" className="hover:text-black dark:hover:text-white transition-colors">Contact</Link>
+              <a href="#faq" className="hover:text-black dark:hover:text-white transition-colors">FAQ</a>
             </div>
 
             <p className="text-[11px] text-zinc-400 dark:text-zinc-600 pt-2">
