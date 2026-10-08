@@ -14,9 +14,9 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
   // Generate invite link based on user nickname or phone
   const shareUrl = typeof window !== "undefined"
     ? `${window.location.origin}/join?ref=${encodeURIComponent(nickname || userPhone)}`
-    : `https://loci.app/join?ref=${encodeURIComponent(nickname || userPhone)}`;
+    : `https://deloci.online/join?ref=${encodeURIComponent(nickname || userPhone)}`;
 
-  const shareText = `Hey! Join me on Loci so we can watch over each other when walking home safely. 🛡️🚀`;
+  const shareText = `Hey! Join me on Déloci so we can watch over each other when walking home safely. 🛡️🚀`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(shareUrl);
@@ -28,7 +28,7 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
     if (navigator.share) {
       try {
         await navigator.share({
-          title: "Join Loci Safety Network",
+          title: "Join Déloci Safety Network",
           text: shareText,
           url: shareUrl,
         });
@@ -45,11 +45,11 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
       {/* Page Title */}
       <div>
         <h2 className="text-base font-black text-black dark:text-white flex items-center space-x-1.5">
-          <span>Invite Guardians & Friends</span>
+          <span>Tell Your People About Déloci</span>
           <span>🚀</span>
         </h2>
         <p className="text-[11px] text-zinc-400">
-          Share your personal link so your squad can join Loci and protect each other.
+          Share your personal link to those you love,friends and families, so you can protect each other.
         </p>
       </div>
 
@@ -68,7 +68,7 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
             Expand Your Safety Net 🛡️
           </h3>
           <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-            When your friends join Loci using your link, they are automatically added to your contact pool!
+            When your friends join Déloci using your link, they are automatically added to your contact pool!
           </p>
         </div>
 

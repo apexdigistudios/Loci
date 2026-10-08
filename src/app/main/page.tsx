@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { Login, UserData } from "@/components/login";
 import { MainApp } from "@/components/main-app";
-import { Loader2 } from "lucide-react";
+import { SplashScreen } from "@/components/splash-screen";
 
 export default function MainPage() {
   const [userPhone, setUserPhone] = useState<string | null>(null);
@@ -28,11 +28,7 @@ export default function MainPage() {
   };
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <Loader2 className="w-6 h-6 animate-spin text-yellow-400" />
-      </div>
-    );
+    return <SplashScreen />;
   }
 
   if (!userPhone) {

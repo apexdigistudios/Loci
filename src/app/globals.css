@@ -2,6 +2,16 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
 :root {
   --background: #ffffff;
   --foreground: #000000;
@@ -50,4 +60,14 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), sans-serif;
+}
+
+.leaflet-container {
+  z-index: 0;
+  isolation: isolate;
+}
+
+.loci-leaflet-marker {
+  background: transparent;
+  border: 0;
 }

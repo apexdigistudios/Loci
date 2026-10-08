@@ -1,9 +1,19 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Home, Shield, Users, Share2, User } from "lucide-react";
 import { useTheme } from "next-themes";
 import { supabase } from "@/lib/supabase";
+import { cleanPhone } from "@/lib/utils";
+import { requestNotificationPermission, type NotificationPermissionResult } from "@/lib/notifications";
+import { sendPushTestNotification, subscribeUserToPush } from "@/lib/push-notifications";
+import { prepareAlertFeedback } from "@/lib/alerts";
+import {
+  onSessionStarted,
+  onSenderCheckedIn,
+  onSessionEnded,
+  onSessionOverdue,
+} from "@/lib/session-notifications";
 
 import { HomePage } from "@/components/pages/home-page";
 import { SessionPage } from "@/components/pages/session-page";
@@ -18,9 +28,26 @@ interface MainAppProps {
 
 interface ActiveSession {
   id: string;
+  user_id?: string;
   destination: string;
   expected_arrival_at: string;
   status: "active" | "completed" | "missed" | "escalated";
+  user_reminder_mins?: number;
+  contact_reminder_mins?: number;
+  last_user_checkin_at?: string;
+  notes?: string | null;
+  current_lat?: number | null;
+  current_lng?: number | null;
+}
+
+interface ReceivedSession {
+  id: string;
+  user_phone: string;
+  destination: string;
+  expected_arrival_at: string;
+  status: "active" | "completed" | "missed" | "escalated";
+  friendName: string;
+  avatarUrl?: string;
 }
 
 const BANNERS = [
@@ -50,14 +77,18 @@ const BANNERS = [
 export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const [activeTab, setActiveTab] = useState<"home" | "session" | "contacts" | "share" | "profile">("home");
   const [nickname, setNickname] = useState("");
+  const [userId, setUserId] = useState<string | null>(null);
   const [fullName, setFullName] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
   const [activeSession, setActiveSession] = useState<ActiveSession | null>(null);
+  const [receivedSessions, setReceivedSessions] = useState<ReceivedSession[]>([]);
 
   const [destination, setDestination] = useState("");
   const [durationMinutes, setDurationMinutes] = useState<number | "">(30);
+  const [userReminderMins, setUserReminderMins] = useState<number | "">(15);
+  const [contactReminderMins, setContactReminderMins] = useState<number | "">(30);
   const [notes, setNotes] = useState("");
   const [sessionLoading, setSessionLoading] = useState(false);
 
@@ -66,13 +97,43 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const [addingContact, setAddingContact] = useState(false);
 
   const [locationCoords, setLocationCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [locationStatus, setLocationStatus] = useState<"idle" | "granted" | "denied">("idle");
+  const [locationStatus, setLocationStatus] = useState<"idle" | "requesting" | "granted" | "low-accuracy" | "denied">("idle");
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
 
   const [dataLoading, setDataLoading] = useState(true);
   const [currentBanner, setCurrentBanner] = useState(0);
+  const [requestedSharedSessionId, setRequestedSharedSessionId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const { theme, resolvedTheme } = useTheme();
+
+  const notificationPermissionRequestRef = useRef<Promise<NotificationPermissionResult> | null>(null);
+  const overdueAlertSentRef = useRef<string | null>(null);
+
+  const ensureNotificationPermission = useCallback(async (): Promise<NotificationPermissionResult> => {
+    if (typeof window === "undefined" || !("Notification" in window)) return "unsupported";
+    if (notificationPermissionRequestRef.current) return notificationPermissionRequestRef.current;
+
+    const permissionRequest = (async () => {
+      try {
+        const permission = Notification.permission === "default"
+          ? await requestNotificationPermission()
+          : Notification.permission;
+        if (permission !== "unsupported") setNotificationPermission(permission);
+        if (permission === "granted" && userId) {
+          const subscription = await subscribeUserToPush(userId);
+          if (!subscription.ok) console.warn("Push subscription was not registered:", subscription.reason);
+        }
+        return permission;
+      } catch (err: unknown) {
+        console.error("Notification prompt error:", err);
+        return Notification.permission;
+      } finally {
+        notificationPermissionRequestRef.current = null;
+      }
+    })();
+    notificationPermissionRequestRef.current = permissionRequest;
+    return permissionRequest;
+  }, [userId]);
 
   useEffect(() => {
     setMounted(true);
@@ -81,31 +142,46 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     }
   }, []);
 
+  useEffect(() => {
+    const sharedSessionId = new URLSearchParams(window.location.search).get("sharedSessionId");
+    if (!sharedSessionId) return;
+    setRequestedSharedSessionId(sharedSessionId);
+    setActiveTab("contacts");
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
+
   const triggerNotificationPrompt = async () => {
-    if (typeof window !== "undefined" && "Notification" in window) {
-      try {
-        const perm = await Notification.requestPermission();
-        setNotificationPermission(perm);
-      } catch (err) {
-        console.error("Notification prompt error:", err);
-      }
-    }
+    await ensureNotificationPermission();
+  };
+
+  const handleTestPush = async () => {
+    if (!userId) return "User profile is still loading.";
+    const result = await sendPushTestNotification(userId);
+    return result.ok
+      ? `Test push accepted by ${result.data?.delivered ?? 0} device subscription(s).`
+      : `Test push failed: ${result.reason}.`;
   };
 
   const triggerLocationPrompt = () => {
-    if (typeof window !== "undefined" && "geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setLocationCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-          setLocationStatus("granted");
-        },
-        (err) => {
-          console.warn("Location permission error:", err);
-          setLocationStatus("denied");
-        },
-        { enableHighAccuracy: true }
-      );
+    if (typeof window === "undefined") return;
+    if (!("geolocation" in navigator)) {
+      setLocationStatus("denied");
+      return;
     }
+
+    setLocationCoords(null);
+    setLocationStatus("requesting");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocationCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setLocationStatus(pos.coords.accuracy > 500 ? "low-accuracy" : "granted");
+      },
+      (err) => {
+        console.warn("Location permission error:", err);
+        setLocationStatus("denied");
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 }
+    );
   };
 
   useEffect(() => {
@@ -115,19 +191,23 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     return () => clearInterval(timer);
   }, []);
 
+  // Fetch contacts and cross-match their profile DPs dynamically
   const loadUserData = useCallback(async () => {
     setDataLoading(true);
     try {
       const { data: userData } = await supabase
         .from("users")
-        .select("full_name, nickname, avatar_url")
+        .select("id, full_name, nickname, avatar_url")
         .eq("phone", userPhone)
         .maybeSingle();
 
       if (userData) {
+        setUserId(userData.id);
         setFullName(userData.full_name || "");
         setNickname(userData.nickname || "");
         setAvatarUrl(userData.avatar_url || "");
+      } else {
+        setUserId(null);
       }
 
       const { data: contactsData } = await supabase
@@ -143,7 +223,9 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           .select("phone, avatar_url")
           .in("phone", phoneNumbers);
 
-        const userAvatarMap = new Map((matchedUsers || []).map((u) => [u.phone, u.avatar_url]));
+        const userAvatarMap = new Map(
+          (matchedUsers || []).map((u) => [u.phone, u.avatar_url])
+        );
 
         const formattedContacts: Contact[] = contactsData.map((c) => ({
           ...c,
@@ -157,14 +239,15 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         setContacts([]);
       }
 
-      const { data: sessionData } = await supabase
+      const { data: activeSessionRows } = await supabase
         .from("checkin_sessions")
-        .select("id, destination, expected_arrival_at, status")
-        .eq("user_phone", userPhone)
+        .select("id, user_phone, destination, expected_arrival_at, status, notes, user_reminder_mins, contact_reminder_mins, last_user_checkin_at")
         .eq("status", "active")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .order("created_at", { ascending: false });
+
+      const sessionData = activeSessionRows?.find((session) =>
+        cleanPhone(session.user_phone) === cleanPhone(userPhone)
+      );
 
       if (sessionData) {
         setActiveSession(sessionData);
@@ -195,31 +278,87 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     loadUserData();
   }, [loadUserData]);
 
-  // Global Supabase Realtime Listener
+  const fetchReceivedSessions = useCallback(async () => {
+    const contactPhones = new Set(contacts
+      .map((contact) => cleanPhone(contact.phone))
+      .filter((phone) => phone && phone !== cleanPhone(userPhone)));
+
+    const [{ data: sessions, error }, { data: recipients, error: recipientError }] = await Promise.all([
+      supabase
+        .from("checkin_sessions")
+        .select("id, user_phone, destination, expected_arrival_at, status")
+        .eq("status", "active")
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("session_recipients")
+        .select("session_id, recipient_phone, contact_phone"),
+    ]);
+
+    if (error || !sessions) {
+      console.error("Failed to load received sessions:", error);
+      return;
+    }
+    if (recipientError) console.error("Failed to load received session recipients:", recipientError);
+
+    const currentPhone = cleanPhone(userPhone);
+    const recipientSessionIds = new Set((recipients || [])
+      .filter((recipient) =>
+        cleanPhone(recipient.recipient_phone) === currentPhone ||
+        cleanPhone(recipient.contact_phone) === currentPhone
+      )
+      .map((recipient) => recipient.session_id));
+
+    const receivedSessions = sessions.filter((session) => {
+      const ownerPhone = cleanPhone(session.user_phone);
+      return ownerPhone !== currentPhone && (contactPhones.has(ownerPhone) || recipientSessionIds.has(session.id));
+    });
+
+    const senderPhones = Array.from(new Set(receivedSessions.map((session) => session.user_phone)));
+    const { data: users } = await supabase
+      .from("users")
+      .select("phone, nickname, full_name, avatar_url")
+      .in("phone", senderPhones);
+
+    setReceivedSessions(
+      receivedSessions.map((session) => {
+        const contact = contacts.find((item) => cleanPhone(item.phone) === cleanPhone(session.user_phone));
+        const user = users?.find((item) => cleanPhone(item.phone) === cleanPhone(session.user_phone));
+        return {
+          ...session,
+          friendName: user?.nickname || user?.full_name || contact?.name || "Circle Friend",
+          avatarUrl: user?.avatar_url || undefined,
+        };
+      })
+    );
+  }, [contacts, userPhone]);
+
   useEffect(() => {
-    if (contacts.length === 0) return;
-    const contactPhones = contacts.map((c) => c.phone);
+    const timer = setTimeout(() => {
+      void fetchReceivedSessions();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [fetchReceivedSessions]);
+
+  useEffect(() => {
+    const contactPhones = new Set(contacts
+      .map((contact) => cleanPhone(contact.phone))
+      .filter((phone) => phone && phone !== cleanPhone(userPhone)));
 
     const channel = supabase
       .channel("global_realtime_sessions")
       .on(
         "postgres_changes",
         {
-          event: "INSERT",
+          event: "*",
           schema: "public",
           table: "checkin_sessions",
         },
         (payload) => {
-          const newSession = payload.new;
-          if (newSession && contactPhones.includes(newSession.user_phone) && newSession.status === "active") {
-            const friendName = contacts.find((c) => c.phone === newSession.user_phone)?.name || "A friend in your circle";
-
-            if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-              new Notification("🚨 Circle Safety Alert", {
-                body: `${friendName} just started a live watch session heading to ${newSession.destination}!`,
-                icon: "/loci-dark.png",
-              });
-            }
+          const newSession = payload.new as Partial<ReceivedSession>;
+          const oldSession = payload.old as Partial<ReceivedSession>;
+          const changedSession = newSession.user_phone ? newSession : oldSession;
+          if (changedSession.user_phone && contactPhones.has(cleanPhone(changedSession.user_phone))) {
+            void fetchReceivedSessions();
           }
         }
       )
@@ -228,33 +367,45 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [contacts]);
+  }, [contacts, fetchReceivedSessions, userPhone]);
 
-  // System Notification Sync
   useEffect(() => {
     if (!activeSession) return;
 
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-      new Notification("🛡️ Loci Active Watch Session", {
-        body: `Journey to ${activeSession.destination} in progress. Guardians are watching.`,
-        icon: "/loci-dark.png",
-        tag: "active-loci-session",
-      });
-    }
-
     const titleInterval = setInterval(() => {
       if (typeof document !== "undefined") {
-        document.title = "🛡️ Active Walk Session — Loci";
+        document.title = "🛡️ Active Walk Session — Déloci";
       }
     }, 2000);
 
     return () => {
       clearInterval(titleInterval);
       if (typeof document !== "undefined") {
-        document.title = "Loci — Personal Safety";
+        document.title = "Déloci — Personal Safety";
       }
     };
   }, [activeSession]);
+
+  // --- OVERDUE CHECKER FOR RECEIVER GUARDIAN ALERTS ---
+  useEffect(() => {
+    if (!activeSession || activeSession.status !== "active") return;
+
+    const checkOverdueAlert = () => {
+      const now = Date.now();
+      const expectedTime = new Date(activeSession.expected_arrival_at).getTime();
+
+      if (now > expectedTime && overdueAlertSentRef.current !== activeSession.id) {
+        overdueAlertSentRef.current = activeSession.id;
+        const senderDisplayName = nickname || fullName || "Your friend";
+        const contactPhones = contacts.map((c) => c.phone);
+        void onSessionOverdue(senderDisplayName, activeSession.destination, contactPhones);
+      }
+    };
+
+    checkOverdueAlert();
+    const overdueInterval = setInterval(checkOverdueAlert, 10000);
+    return () => clearInterval(overdueInterval);
+  }, [activeSession, contacts, fullName, nickname]);
 
   const toggleContactSelection = (id: string) => {
     setSelectedContactIds((prev) =>
@@ -262,8 +413,12 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     );
   };
 
-  const handleStartSession = async (e: React.FormEvent) => {
+  const handleStartSession = async (
+    e: React.FormEvent,
+    coordinates?: { latitude: number; longitude: number }
+  ) => {
     e.preventDefault();
+    void prepareAlertFeedback();
     const finalMins = Number(durationMinutes) || 30;
     const destName = destination.trim() || "Destination Check-In";
 
@@ -273,6 +428,11 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       destination: destName,
       expected_arrival_at: arrivalTime,
       status: "active",
+      user_reminder_mins: Number(userReminderMins) || 15,
+      contact_reminder_mins: Number(contactReminderMins) || 30,
+      last_user_checkin_at: new Date().toISOString(),
+      current_lat: coordinates?.latitude ?? null,
+      current_lng: coordinates?.longitude ?? null,
     };
 
     setActiveSession(tempSession);
@@ -282,21 +442,45 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     setActiveTab("session");
     setSessionLoading(true);
 
+    const selectedContacts = contacts.filter((contact) => selectedContactIds.includes(contact.id));
+    const targetPhones = selectedContacts.length > 0
+      ? selectedContacts.map((c) => c.phone)
+      : contacts.map((c) => c.phone);
+
+    const senderDisplayName = nickname || fullName || "Your friend";
+    void onSessionStarted(senderDisplayName, destName, targetPhones);
+
     try {
       const { data, error } = await supabase
         .from("checkin_sessions")
         .insert({
+          user_id: userId,
           user_phone: userPhone,
           destination: destName,
           expected_arrival_at: arrivalTime,
           status: "active",
+          user_reminder_mins: Number(userReminderMins) || 15,
+          contact_reminder_mins: Number(contactReminderMins) || 30,
+          last_user_checkin_at: new Date().toISOString(),
           notes: notes.trim() || null,
+          current_lat: coordinates?.latitude ?? null,
+          current_lng: coordinates?.longitude ?? null,
         })
         .select()
         .single();
 
       if (!error && data) {
         setActiveSession(data);
+        if (selectedContacts.length > 0) {
+          const { error: recipientsError } = await supabase
+            .from("session_recipients")
+            .insert(selectedContacts.map((contact) => ({
+              session_id: data.id,
+              contact_phone: contact.phone,
+              recipient_phone: contact.phone,
+            })));
+          if (recipientsError) console.error("Failed to save session guardians:", recipientsError);
+        }
         if (typeof window !== "undefined") {
           localStorage.setItem("loci_active_session", JSON.stringify(data));
         }
@@ -310,6 +494,33 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     }
   };
 
+  const handleSafeCheckin = async () => {
+    if (!activeSession) return;
+    const checkedInAt = new Date().toISOString();
+
+    if (!activeSession.id.startsWith("local-")) {
+      const { error } = await supabase
+        .from("checkin_sessions")
+        .update({ last_user_checkin_at: checkedInAt })
+        .eq("id", activeSession.id)
+        .eq("status", "active");
+      if (error) {
+        console.error("Failed to record safety check-in:", error);
+        return;
+      }
+    }
+
+    const updatedSession = { ...activeSession, last_user_checkin_at: checkedInAt };
+    setActiveSession(updatedSession);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("loci_active_session", JSON.stringify(updatedSession));
+    }
+
+    const senderDisplayName = nickname || fullName || "Your friend";
+    const targetPhones = contacts.map((c) => c.phone);
+    void onSenderCheckedIn(senderDisplayName, targetPhones);
+  };
+
   const handleCompleteSession = async () => {
     const currentId = activeSession?.id;
     setActiveSession(null);
@@ -317,12 +528,9 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       localStorage.removeItem("loci_active_session");
     }
 
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-      new Notification("🛡️ Loci Session Completed", {
-        body: "Your active watch session was completed safely. Guardians notified.",
-        icon: "/loci-dark.png",
-      });
-    }
+    const senderDisplayName = nickname || fullName || "Your friend";
+    const targetPhones = contacts.map((c) => c.phone);
+    void onSessionEnded(senderDisplayName, targetPhones);
 
     if (currentId && !currentId.startsWith("local-")) {
       setSessionLoading(true);
@@ -334,17 +542,27 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     }
   };
 
-  const handleAddManualContact = async (e: React.FormEvent, selectedGroup = "Emergency Circle") => {
-    e.preventDefault();
-    if (!manualName.trim() || !manualPhone.trim()) return;
+  const handleAddManualContact = async (
+    selectedGroup = "Emergency Circle",
+    pendingContact?: { name: string; phone: string }
+  ): Promise<boolean> => {
+    const contactName = pendingContact?.name.trim() || manualName.trim();
+    const contactPhone = (pendingContact?.phone || manualPhone).replace(/[\s\-\(\)]/g, "");
+    if (!contactName || !/^\+\d{7,15}$/.test(contactPhone)) return false;
 
     setAddingContact(true);
+    const { data: matchedUser } = await supabase
+      .from("users")
+      .select("phone, avatar_url")
+      .eq("phone", contactPhone)
+      .maybeSingle();
+
     const { data, error } = await supabase
       .from("trusted_contacts")
       .insert({
         user_phone: userPhone,
-        name: manualName.trim(),
-        phone: manualPhone.trim(),
+        name: contactName,
+        phone: contactPhone,
         group_category: selectedGroup,
       })
       .select()
@@ -353,12 +571,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     setAddingContact(false);
 
     if (!error && data) {
-      const { data: matchedUser } = await supabase
-        .from("users")
-        .select("phone, avatar_url")
-        .eq("phone", data.phone)
-        .maybeSingle();
-
       const newContact: Contact = {
         ...data,
         isLociUser: !!matchedUser,
@@ -369,7 +581,10 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       setSelectedContactIds((prev) => [...prev, newContact.id]);
       setManualName("");
       setManualPhone("");
+      return true;
     }
+    if (error) console.error("Failed to add guardian contact:", error);
+    return false;
   };
 
   const handleDeleteContact = async (id: string) => {
@@ -381,14 +596,12 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   };
 
   const isDark = mounted && (theme === "dark" || resolvedTheme === "dark");
-  const logoSrc = isDark ? "/loci-dark.png" : "/loci-light.png";
   const sessionHeadingSrc = isDark ? "/session-dark.png" : "/session-light.png";
 
   return (
     <div className="min-h-screen bg-zinc-100/60 dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between max-w-md mx-auto w-full font-sans antialiased relative border-x border-zinc-200/50 dark:border-zinc-900 selection:bg-yellow-400 selection:text-black">
-      {/* Top Header */}
       {activeTab !== "session" && (
-        <header className="sticky top-0 z-30 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5 bg-white/70 dark:bg-black/70 backdrop-blur-3xl border-b border-zinc-200/40 dark:border-zinc-800/40 grid grid-cols-3 items-center">
+        <header className="sticky top-0 z-50 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5 bg-white/70 dark:bg-black/70 backdrop-blur-3xl border-b border-zinc-200/40 dark:border-zinc-800/40 grid grid-cols-3 items-center">
           <div className="text-left truncate leading-none">
             <span className="text-[11px] font-medium text-zinc-400 dark:text-zinc-500 block mb-0.5">
               Welcome,
@@ -399,7 +612,8 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           </div>
 
           <div className="flex justify-center items-center">
-            <img src={logoSrc} alt="Loci Logo" className="h-7 w-auto object-contain" />
+            <img src="/loci-light.png" alt="Déloci Logo" className="h-10 w-auto object-contain shrink-0 dark:hidden" />
+            <img src="/loci-dark.png" alt="Déloci Logo" className="hidden h-10 w-auto object-contain shrink-0 dark:block" />
           </div>
 
           <div className="flex justify-end items-center">
@@ -424,7 +638,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         </header>
       )}
 
-      {/* Main Tab Views */}
       <main className="flex-1 px-4 py-5 space-y-5 pb-28">
         {dataLoading ? (
           <div className="space-y-5 animate-pulse">
@@ -445,12 +658,19 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
               <HomePage
                 contacts={contacts}
                 activeSession={activeSession}
+                receivedSessions={receivedSessions}
+                currentUserPhone={userPhone}
+                onViewLiveFeed={(sessionId) => {
+                  setRequestedSharedSessionId(sessionId);
+                  setActiveTab("contacts");
+                }}
                 currentBanner={currentBanner}
                 setCurrentBanner={setCurrentBanner}
                 banners={BANNERS}
                 contactsSupported={true}
                 handlePickDeviceContact={() => setActiveTab("contacts")}
                 handleCompleteSession={handleCompleteSession}
+                handleSafeCheckin={handleSafeCheckin}
                 onNavigate={setActiveTab}
               />
             )}
@@ -458,11 +678,15 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             {activeTab === "session" && (
               <SessionPage
                 sessionHeadingSrc={sessionHeadingSrc}
+                userId={userId}
                 activeSession={activeSession}
                 destination={destination}
                 setDestination={setDestination}
-                durationMinutes={durationMinutes}
                 setDurationMinutes={setDurationMinutes}
+                userReminderMins={userReminderMins}
+                setUserReminderMins={setUserReminderMins}
+                contactReminderMins={contactReminderMins}
+                setContactReminderMins={setContactReminderMins}
                 notes={notes}
                 setNotes={setNotes}
                 contacts={contacts}
@@ -471,6 +695,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
                 sessionLoading={sessionLoading}
                 handleStartSession={handleStartSession}
                 handleCompleteSession={handleCompleteSession}
+                handleSafeCheckin={handleSafeCheckin}
                 onNavigate={setActiveTab}
               />
             )}
@@ -478,6 +703,9 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             {activeTab === "contacts" && (
               <ContactsPage
                 userPhone={userPhone}
+                currentUserId={userId}
+                openSessionId={requestedSharedSessionId}
+                onSessionOpened={() => setRequestedSharedSessionId(null)}
                 contacts={contacts}
                 addingContact={addingContact}
                 manualName={manualName}
@@ -486,10 +714,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
                 setManualPhone={setManualPhone}
                 handleAddManualContact={handleAddManualContact}
                 handleDeleteContact={handleDeleteContact}
-                onContactAdded={(newC) => {
-                  setContacts((prev) => [newC, ...prev]);
-                  setSelectedContactIds((prev) => [...prev, newC.id]);
-                }}
               />
             )}
 
@@ -501,6 +725,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
               <ProfilePage
                 fullName={fullName}
                 nickname={nickname}
+                userId={userId}
                 userPhone={userPhone}
                 avatarUrl={avatarUrl}
                 onAvatarChange={(url) => setAvatarUrl(url)}
@@ -509,6 +734,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
                 locationCoords={locationCoords}
                 triggerNotificationPrompt={triggerNotificationPrompt}
                 triggerLocationPrompt={triggerLocationPrompt}
+                onTestPush={handleTestPush}
                 onLogout={onLogout}
               />
             )}
@@ -516,8 +742,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         )}
       </main>
 
-      {/* Persistent Bottom Navbar */}
-      <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-104 p-1 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-3xl border border-zinc-200/40 dark:border-zinc-800/50 rounded-full shadow-2xl z-30 grid grid-cols-4 gap-1">
+      <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-104 p-1 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-3xl border border-zinc-200/40 dark:border-zinc-800/50 rounded-full shadow-2xl z-50 grid grid-cols-4 gap-1">
         <button
           onClick={() => setActiveTab("home")}
           className={`flex items-center justify-center space-x-1 py-2.5 rounded-full transition-all active:scale-95 ${

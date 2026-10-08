@@ -4,10 +4,10 @@ import { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Loci - Safety Check-In',
-    short_name: 'Loci',
+    name: 'Déloci - Safety Check-In',
+    short_name: 'Déloci',
     description: 'Consent-based safety check-in application',
-    start_url: '/',
+    start_url: '/login',
     display: 'standalone',
     background_color: '#000000',
     theme_color: '#000000',
