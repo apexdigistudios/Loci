@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Déloci</string>
+    <string name="title_activity_main">Déloci</string>
+    <string name="package_name">online.deloci.app</string>
+    <string name="custom_url_scheme">online.deloci.app</string>
+</resources>
