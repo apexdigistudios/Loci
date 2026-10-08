@@ -72,6 +72,13 @@ interface SessionPageProps {
   onNavigate: (tab: "home" | "session" | "contacts" | "share" | "profile") => void;
 }
 
+interface SuggestionItem {
+  place_id: number;
+  display_name: string;
+  lat: string;
+  lon: string;
+}
+
 export function SessionPage({
   sessionHeadingSrc,
   userId,
@@ -123,6 +130,11 @@ export function SessionPage({
   const [manuallyPickedLocation, setManuallyPickedLocation] = useState(false);
   const manuallyPickedLocationRef = useRef(false);
 
+  /* Lag-free Auto-Suggestions State */
+  const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
+  const [isFetchingSuggestions, setIsFetchingSuggestions] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
   const lastCheckinPushRef = useRef<number>(0);
   const lastExpiryPushRef = useRef<boolean>(false);
   const lastGuardianOverduePushRef = useRef<boolean>(false);
@@ -147,6 +159,50 @@ export function SessionPage({
     () => Array.from(new Set(contacts.map((contact) => contact.group_category).filter((group): group is string => !!group))),
     [contacts]
   );
+
+  /* Optimized Auto-Suggestions with AbortController and Local Country Bounding */
+  useEffect(() => {
+    if (!destination || destination.trim().length < 2 || !showSuggestions) {
+      setSuggestions([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setIsFetchingSuggestions(true);
+      try {
+        let url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+          destination.trim()
+        )}&limit=5`;
+
+        // Prioritize local country / GPS area bounding box if location is available, while allowing global matches
+        if (locationCoords) {
+          const minLon = locationCoords.longitude - 3;
+          const maxLat = locationCoords.latitude + 3;
+          const maxLon = locationCoords.longitude + 3;
+          const minLat = locationCoords.latitude - 3;
+          url += `&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=0`;
+        }
+
+        const res = await fetch(url, { signal: controller.signal });
+        if (res.ok) {
+          const data = await res.json();
+          setSuggestions(data);
+        }
+      } catch (err: unknown) {
+        if ((err as Error)?.name !== "AbortError") {
+          console.error("Failed to fetch location suggestions:", err);
+        }
+      } finally {
+        setIsFetchingSuggestions(false);
+      }
+    }, 250);
+
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [destination, showSuggestions, locationCoords]);
 
   const requestCurrentLocation = () => {
     if (!navigator.geolocation) {
@@ -306,13 +362,11 @@ export function SessionPage({
     activeSession.last_user_checkin_at || activeSession.expected_arrival_at
   ).getTime() >= (activeSession.user_reminder_mins || 15) * 60000;
 
-  // Dispatch push alerts for active session check-ins, arrival expiry & guardian overdue escalation
   useEffect(() => {
     if (!activeSession || !userId) return;
 
     const now = Date.now();
 
-    // 1. User check-in reminder interval
     if (isSafetyCheckinDue) {
       if (now - lastCheckinPushRef.current > 120000) {
         lastCheckinPushRef.current = now;
@@ -325,7 +379,6 @@ export function SessionPage({
       }
     }
 
-    // 2. Arrival time reached
     if (targetEndTime && now >= targetEndTime && !lastExpiryPushRef.current) {
       lastExpiryPushRef.current = true;
       triggerAlertFeedback();
@@ -336,7 +389,6 @@ export function SessionPage({
       );
     }
 
-    // 3. Guardian Grace Timer overdue (User hasn't ended session after overdue target + guardian timer)
     const guardianGraceMins = activeSession.contact_reminder_mins || 30;
     const guardianAlertTime = (targetEndTime || 0) + guardianGraceMins * 60000;
 
@@ -344,14 +396,12 @@ export function SessionPage({
       lastGuardianOverduePushRef.current = true;
       triggerAlertFeedback();
 
-      // Alert user
       void sendPushAlert(
         userId,
         "Guardian Alert Escalated 🚨",
         `You have not ended your session. Your guardians have been alerted.`
       );
 
-      // Alert shared guardians
       void sendPushAlert(
         guardianUserIds,
         "EMERGENCY: Session Overdue 🚨",
@@ -368,7 +418,6 @@ export function SessionPage({
   const onEndSessionClick = async () => {
     handleCompleteSession();
 
-    // Notify guardians that session ended safely
     if (guardianUserIds.length > 0) {
       void sendPushAlert(
         guardianUserIds,
@@ -517,7 +566,6 @@ export function SessionPage({
 
     handleStartSession(event, locationCoords || undefined);
 
-    // Notify user & guardians when session starts
     if (userId) {
       void sendPushAlert(
         userId,
@@ -533,6 +581,13 @@ export function SessionPage({
         `A safety session heading to ${destination} has been shared with you.`
       );
     }
+  };
+
+  /* Sets destination text without touching the departure pin */
+  const selectSuggestion = (item: SuggestionItem) => {
+    setDestination(item.display_name);
+    setShowSuggestions(false);
+    setSuggestions([]);
   };
 
   return (
@@ -631,8 +686,9 @@ export function SessionPage({
               </div>
             </div>
 
-            <div className="flex items-center justify-center py-4">
-              <span className="font-mono font-black text-6xl sm:text-7xl tracking-tighter scale-y-[1.3] text-yellow-400 select-none drop-shadow-[0_4px_16px_rgba(250,204,21,0.25)]">
+            {/* Theme-Adaptive Timer Card */}
+            <div className="rounded-3xl bg-zinc-100/80 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800/80 p-6 backdrop-blur-xl shadow-sm flex items-center justify-center">
+              <span className="font-mono font-black text-6xl sm:text-7xl tracking-tighter scale-y-[1.3] text-yellow-500 dark:text-yellow-400 select-none drop-shadow-[0_4px_16px_rgba(250,204,21,0.25)]">
                 {formatTime(remainingSeconds)}
               </span>
             </div>
@@ -805,21 +861,45 @@ export function SessionPage({
                     </p>
                   </div>
 
-                  <div className="space-y-2">
+                  <div className="space-y-2 relative">
                     <label className="block text-xs font-extrabold text-black dark:text-white">
                       Destination Address / Route
                     </label>
                     <div className="relative flex items-center">
-                      <MapPin className="w-4 h-4 absolute left-4 text-zinc-400" />
+                      <MapPin className="w-4 h-4 absolute left-4 text-zinc-400 z-10" />
                       <input
                         type="text"
                         required={currentStep === 1}
                         placeholder="e.g. Osu Oxford Street or Home"
                         value={destination}
-                        onChange={(e) => setDestination(e.target.value)}
-                        className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl pl-11 pr-5 py-4 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400 transition-all shadow-inner"
+                        onChange={(e) => {
+                          setDestination(e.target.value);
+                          setShowSuggestions(true);
+                        }}
+                        onFocus={() => setShowSuggestions(true)}
+                        className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl pl-11 pr-10 py-4 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400 transition-all shadow-inner"
                       />
+                      {isFetchingSuggestions && (
+                        <Loader2 className="w-4 h-4 absolute right-4 text-yellow-500 animate-spin z-10" />
+                      )}
                     </div>
+
+                    {/* Auto-suggestions Dropdown */}
+                    {showSuggestions && suggestions.length > 0 && (
+                      <div className="absolute top-full left-0 right-0 mt-1 z-30 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl border border-zinc-300/60 dark:border-zinc-800 rounded-2xl shadow-2xl max-h-52 overflow-y-auto divide-y divide-zinc-200/60 dark:divide-zinc-800/60">
+                        {suggestions.map((item) => (
+                          <button
+                            key={item.place_id}
+                            type="button"
+                            onClick={() => selectSuggestion(item)}
+                            className="w-full text-left px-4 py-3 text-xs font-semibold text-black dark:text-zinc-200 hover:bg-yellow-400/20 transition-colors flex items-start gap-2"
+                          >
+                            <MapPin className="w-3.5 h-3.5 text-yellow-500 shrink-0 mt-0.5" />
+                            <span className="line-clamp-2 leading-tight">{item.display_name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="space-y-2.5 pt-1">
@@ -1164,7 +1244,7 @@ export function SessionPage({
                   ) : (
                     <>
                       <Sparkles className="w-4 h-4 text-black fill-black" />
-                      <span>Start Watch Session</span>
+                      <span>Start Session</span>
                     </>
                   )}
                 </button>

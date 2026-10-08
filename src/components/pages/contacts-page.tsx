@@ -258,7 +258,7 @@ export function ContactsPage({
           }}
           className={`py-2 rounded-full text-xs font-black transition-all flex items-center justify-center space-x-1.5 ${
             subTab === "contacts"
-              ? "bg-white dark:bg-zinc-800 text-black dark:text-white shadow-sm"
+              ? "bg-white dark:bg-zinc-800 text-black dark:text-white shadow-xs"
               : "text-zinc-400 hover:text-black dark:hover:text-white"
           }`}
         >
@@ -270,7 +270,7 @@ export function ContactsPage({
           onClick={() => setSubTab("shared")}
           className={`py-2 rounded-full text-xs font-black transition-all flex items-center justify-center space-x-1.5 relative ${
             subTab === "shared"
-              ? "bg-white dark:bg-zinc-800 text-black dark:text-white shadow-sm"
+              ? "bg-white dark:bg-zinc-800 text-black dark:text-white shadow-xs"
               : "text-zinc-400 hover:text-black dark:hover:text-white"
           }`}
         >
@@ -287,7 +287,7 @@ export function ContactsPage({
               <div className="flex items-center justify-between">
                 <button
                   onClick={() => setActiveGroupView(null)}
-                  className="p-2.5 rounded-full bg-zinc-200/60 dark:bg-zinc-900/60 backdrop-blur-xl text-black dark:text-white active:scale-90 transition-all shadow-sm flex items-center space-x-1 pr-3.5 border border-zinc-300/40 dark:border-zinc-800"
+                  className="p-2.5 rounded-full bg-zinc-200/60 dark:bg-zinc-900/60 backdrop-blur-xl text-black dark:text-white active:scale-90 transition-all shadow-xs flex items-center space-x-1 pr-3.5 border border-zinc-300/40 dark:border-zinc-800"
                 >
                   <ChevronLeft className="w-4 h-4 stroke-[2.5]" />
                   <span className="text-xs font-bold">Groups</span>
@@ -354,7 +354,7 @@ export function ContactsPage({
                         setSelectedGroup(activeGroupView);
                         setShowAddModal(true);
                       }}
-                      className="inline-flex items-center space-x-1.5 bg-yellow-400 text-black px-4 py-2 rounded-full text-xs font-black shadow-sm"
+                      className="inline-flex items-center space-x-1.5 bg-yellow-400 text-black px-4 py-2 rounded-full text-xs font-black shadow-xs"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       <span>Add Guardian to {activeGroupView}</span>
@@ -364,7 +364,7 @@ export function ContactsPage({
                   groupContacts.map((c) => (
                     <div
                       key={c.id}
-                      className="bg-white/80 dark:bg-zinc-900/60 border border-zinc-200/50 dark:border-zinc-800/50 px-4 py-3.5 rounded-2xl flex items-center justify-between shadow-sm"
+                      className="bg-white/80 dark:bg-zinc-900/60 border border-zinc-200/50 dark:border-zinc-800/50 px-4 py-3.5 rounded-2xl flex items-center justify-between shadow-xs"
                     >
                       <div className="flex items-center space-x-3">
                         <div className="w-10 h-10 rounded-full overflow-hidden bg-zinc-900 text-yellow-400 font-black text-xs flex items-center justify-center uppercase border border-yellow-400/40">
@@ -404,7 +404,7 @@ export function ContactsPage({
             <div className="space-y-4">
               <div className="flex items-center justify-between px-1">
                 <div>
-                  <h2 className="text-base font-black text-black dark:text-white">My Circle 🛡️️</h2>
+                  <h2 className="text-base font-black text-black dark:text-white">My Circle 🛡</h2>
                   <p className="text-[11px] text-zinc-400">
                     Organized guardian circles for instant safety dispatch.
                   </p>
@@ -432,7 +432,7 @@ export function ContactsPage({
                     <div
                       key={grp.key}
                       onClick={() => setActiveGroupView(grp.key)}
-                      className={`p-4 rounded-[26px] ${grp.accent} border relative overflow-hidden cursor-pointer active:scale-95 transition-all shadow-sm flex flex-col justify-between group ${
+                      className={`p-4 rounded-[26px] ${grp.accent} border relative overflow-hidden cursor-pointer active:scale-95 transition-all shadow-xs flex flex-col justify-between group ${
                         isWide ? "col-span-2 min-h-36" : "min-h-40"
                       }`}
                     >
@@ -476,7 +476,7 @@ export function ContactsPage({
 
           {/* Add Modal */}
           {showAddModal && (
-            <div className="fixed inset-0 z-100 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
+            <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
               <div className="bg-zinc-900 text-white border border-zinc-800 rounded-4xl p-6 w-full max-w-sm space-y-5 relative shadow-2xl">
                 <button
                   onClick={() => setShowAddModal(false)}
@@ -507,7 +507,7 @@ export function ContactsPage({
                         onClick={() => setSelectedGroup(g.key)}
                         className={`p-2.5 rounded-xl text-xs font-black text-left border transition-all ${
                           selectedGroup === g.key
-                            ? "bg-yellow-400 text-black border-yellow-400 shadow-sm"
+                            ? "bg-yellow-400 text-black border-yellow-400 shadow-xs"
                             : "bg-black/50 text-zinc-300 border-zinc-800 hover:border-zinc-700"
                         }`}
                       >
@@ -625,7 +625,7 @@ export function ContactsPage({
       )}
 
       {pendingContact && (
-        <div className="fixed inset-0 z-110 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center">
           <div className="w-full max-w-sm space-y-5 rounded-2xl border border-zinc-700 bg-zinc-900 p-6 text-white shadow-2xl">
             <div className="space-y-1">
               <h3 className="text-sm font-extrabold">Confirm Phone Number</h3>
