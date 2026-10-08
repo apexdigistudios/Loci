@@ -34,32 +34,43 @@ export async function sendPushToReceivers(
   }
 
   try {
-    const cleanedPhones = Array.from(
-      new Set(receiverPhones.map((phone) => cleanPhone(phone)).filter(Boolean))
-    );
+    // 1. Prepare search phones (both cleaned and raw inputs to prevent formatting mismatches)
+    const cleanedPhones = receiverPhones.map((phone) => cleanPhone(phone)).filter(Boolean);
+    const rawPhones = receiverPhones.map((phone) => phone.trim()).filter(Boolean);
+    const searchPhones = Array.from(new Set([...cleanedPhones, ...rawPhones]));
 
-    if (cleanedPhones.length === 0) {
+    if (searchPhones.length === 0) {
       return { success: false, deliveredCount: 0, error: "No valid phone numbers found." };
     }
 
+    console.log("[ReceiverPush] Searching DB for target phones:", searchPhones);
+
+    // 2. Query matching users
     const { data: users, error: userError } = await supabase
       .from("users")
       .select("id, phone")
-      .in("phone", cleanedPhones);
+      .in("phone", searchPhones);
 
     if (userError) {
       console.error("[ReceiverPush] Error querying recipient users:", userError);
       return { success: false, deliveredCount: 0, error: userError.message };
     }
 
+    console.log("[ReceiverPush] Matched recipient users from DB:", users);
+
     if (!users || users.length === 0) {
+      console.warn("[ReceiverPush] 0 registered users matched these phone numbers.");
       return { success: false, deliveredCount: 0, error: "No registered app users matched these phones." };
     }
 
     const targetUserIds = users.map((u) => u.id);
 
-    const { data, error: fnError } = await supabase.functions.invoke("send-push-notification", {
+    console.log("[ReceiverPush] Invoking 'send-push' Edge Function for userIds:", targetUserIds);
+
+    // 3. Invoke 'send-push' edge function
+    const { data, error: fnError } = await supabase.functions.invoke("send-push", {
       body: {
+        action: "send",
         userIds: targetUserIds,
         title: payload.title,
         body: payload.body,
@@ -73,9 +84,11 @@ export async function sendPushToReceivers(
       return { success: false, deliveredCount: 0, error: fnError.message };
     }
 
+    console.log("[ReceiverPush] Edge Function execution result:", data);
+
     return {
       success: true,
-      deliveredCount: data?.delivered ?? targetUserIds.length,
+      deliveredCount: data?.delivered ?? data?.count ?? targetUserIds.length,
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error occurred";
