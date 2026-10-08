@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - master
+      - dev
   workflow_dispatch:
 
 jobs:
@@ -31,6 +32,9 @@ jobs:
         run: npm ci
 
       - name: Build Next.js Static Export
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: npm run build
 
       - name: Sync Capacitor Android
