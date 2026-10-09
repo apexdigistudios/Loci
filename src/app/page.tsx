@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import { Capacitor } from "@capacitor/core";
 import {
   Download,
   Users,
@@ -95,12 +96,21 @@ export default function Home() {
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    // 1. Detect PWA Standalone Mode
+    // 1. Check saved session
+    const savedPhone = localStorage.getItem("loci_user_phone");
+    if (savedPhone) {
+      setUserPhone(savedPhone);
+    }
+
+    // 2. Detect Native App (Capacitor) OR PWA Standalone Mode
+    const isNative = Capacitor.isNativePlatform();
     const isStandalone =
+      isNative ||
       window.matchMedia("(display-mode: standalone)").matches ||
       (navigator as unknown as { standalone?: boolean }).standalone === true;
 
     setIsPWA(isStandalone);
+
     if (isStandalone) {
       const splashTimer = window.setTimeout(() => setSplashComplete(true), 1700);
       const handleInstallWhileStarting = (event: Event) => {
@@ -114,7 +124,7 @@ export default function Home() {
       };
     }
 
-    // 2. Capture install prompt
+    // 3. Capture install prompt (for web visitors)
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e as BeforeInstallPromptEvent);
@@ -154,7 +164,7 @@ export default function Home() {
     setOpenFaqIndex(openFaqIndex === index ? null : index);
   };
 
-  // --- PWA STRICT ROUTING (Bypasses landing page entirely) ---
+  // --- NATIVE APP / PWA ROUTING (Bypasses landing page entirely) ---
   if (isPWA) {
     if (!userPhone) {
       return <Login onSuccess={handleLoginSuccess} showSplash={false} />;
@@ -172,13 +182,11 @@ export default function Home() {
 
       <header className="sticky top-0 z-50 border-b border-zinc-200 dark:border-zinc-800/80 bg-white/80 dark:bg-black/80 backdrop-blur-md">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between relative">
-          {/* Left: Brand Logo */}
           <Link href="/" className="flex items-center space-x-2">
             <img src="/loci-light.png" alt="Déloci Logo" className="h-10 w-auto object-contain shrink-0 dark:hidden" />
             <img src="/loci-dark.png" alt="Déloci Logo" className="hidden h-10 w-auto object-contain shrink-0 dark:block" />
           </Link>
 
-          {/* Center: Desktop Header Navigation Links */}
           <nav className="hidden md:flex items-center space-x-6 text-xs font-bold text-zinc-600 dark:text-zinc-400 absolute left-1/2 -translate-x-1/2">
             <Link href="/about" className="hover:text-black dark:hover:text-white transition-colors">
               About
@@ -197,7 +205,6 @@ export default function Home() {
             </a>
           </nav>
 
-          {/* Right: Actions & Hamburger Toggle */}
           <div className="flex items-center space-x-3">
             <ThemeToggle />
             <button
@@ -208,7 +215,6 @@ export default function Home() {
               <span>Install App</span>
             </button>
 
-            {/* Mobile Hamburger Button */}
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
               className="md:hidden p-2 text-zinc-600 dark:text-zinc-300 hover:text-black dark:hover:text-white"
@@ -219,7 +225,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Mobile Dropdown Navigation Drawer */}
         {isMobileMenuOpen && (
           <div className="md:hidden border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-black px-6 py-4 space-y-3">
             <nav className="flex flex-col space-y-3 text-sm font-bold text-zinc-600 dark:text-zinc-400">
@@ -270,7 +275,6 @@ export default function Home() {
           <LifestyleGallery />
         </ScrollReveal>
 
-        {/* Vertical Flow How It Works Section */}
         <ScrollReveal>
           <section id="how-it-works" className="space-y-10 py-6 max-w-2xl mx-auto px-6">
             <div className="text-center space-y-2">
@@ -288,18 +292,15 @@ export default function Home() {
             </div>
 
             <div className="relative pl-2 sm:pl-4 space-y-8">
-              {/* Vertical Connecting Line */}
               <div className="absolute left-5.75 sm:left-7.75 top-6 bottom-6 w-0.5 bg-yellow-400/50 dark:bg-yellow-400/30" />
 
               {HOW_IT_WORKS_STEPS.map((step, idx) => (
                 <ScrollReveal key={idx} delay={idx * 0.1}>
                   <div className="flex items-start gap-4 sm:gap-6 relative z-10">
-                    {/* Step Icon Badge */}
                     <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-yellow-400 text-black flex items-center justify-center shrink-0 border-4 border-white dark:border-black shadow-md">
                       {step.icon}
                     </div>
 
-                    {/* Step Details */}
                     <div className="pt-1 space-y-1">
                       <span className="text-[10px] sm:text-[11px] font-extrabold uppercase tracking-widest text-yellow-600 dark:text-yellow-400 block">
                         {step.stepLabel}
@@ -315,7 +316,6 @@ export default function Home() {
           </section>
         </ScrollReveal>
 
-        {/* Founder Story Section */}
         <ScrollReveal>
           <section id="story" className="max-w-2xl mx-auto px-6 text-center space-y-6 pt-6">
             <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-zinc-100 dark:border-zinc-800 shadow-md mx-auto bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center">
@@ -365,7 +365,6 @@ export default function Home() {
           </section>
         </ScrollReveal>
 
-        {/* FAQ Section */}
         <ScrollReveal>
           <section id="faq" className="max-w-3xl mx-auto px-6 space-y-8 pt-6">
             <div className="text-center space-y-2">
@@ -408,25 +407,20 @@ export default function Home() {
           </section>
         </ScrollReveal>
 
-        {/* Install Section - Image Matching Banner */}
         <ScrollReveal>
           <section id="install" className="max-w-3xl mx-auto px-6">
             <div className="relative overflow-hidden bg-black text-white dark:bg-zinc-900 border border-zinc-800 rounded-[36px] sm:rounded-[44px] p-8 sm:p-14 text-center space-y-6 shadow-2xl">
-              {/* Corner Circular Background Glows */}
               <div className="absolute -top-12 -right-12 w-60 h-60 rounded-full bg-yellow-400/15 blur-2xl pointer-events-none" />
               <div className="absolute -bottom-12 -left-12 w-60 h-60 rounded-full bg-yellow-400/15 blur-2xl pointer-events-none" />
 
-              {/* Main Banner Heading */}
               <h2 className="relative z-10 text-3xl sm:text-5xl font-black text-white tracking-tight lowercase max-w-lg mx-auto leading-[1.15]">
                 install déloci directly on your phone or computer
               </h2>
 
-              {/* Subtitle */}
               <p className="relative z-10 text-xs sm:text-sm text-zinc-300 font-medium max-w-md mx-auto lowercase leading-relaxed">
                 no app store required — install directly from your browser for native standalone access :)
               </p>
 
-              {/* Side-by-Side Pill Buttons (Stack on Mobile) */}
               <div className="relative z-10 pt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
                 <button
                   onClick={handleInstallClick}

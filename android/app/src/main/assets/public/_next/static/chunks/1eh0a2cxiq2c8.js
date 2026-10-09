@@ -1,1 +1,0 @@
-(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,18566,(e,o,t)=>{o.exports=e.r(76562)},94542,e=>{"use strict";var o=e.i(43476),t=e.i(18566),s=e.i(71922);e.s(["default",0,function(){let e=(0,t.useRouter)();return(0,o.jsx)(s.Login,{onSuccess:o=>{localStorage.setItem("loci_user_phone",o.phone),e.push("/main")}})}])}]);

@@ -1,5 +1,9 @@
 {
 	"appId": "online.deloci.app",
 	"appName": "Déloci",
-	"webDir": "out"
+	"webDir": "out",
+	"server": {
+		"url": "https://deloci.online",
+		"cleartext": true
+	}
 }
