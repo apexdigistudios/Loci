@@ -56,21 +56,21 @@ const BANNERS = [
     tag: "⚡ RADAR ACTIVE",
     title: "Instant Guardian Radar 🚀",
     desc: "Lock in your route and notify your squad in real-time!",
-    bg: "bg-zinc-900 text-white dark:bg-zinc-800/90 border border-zinc-800 dark:border-zinc-700/80",
+    image: "/banner/banner1.png",
   },
   {
     id: 2,
     tag: "🌙 NIGHT WATCH",
     title: "Walking Late Tonight? 📱",
     desc: "Set your safety countdown before heading out!",
-    bg: "bg-black text-zinc-100 border border-zinc-800",
+    image: "/banner/banner2.png",
   },
   {
     id: 3,
     tag: "🔒 PRIVACY FIRST",
     title: "100% Protected 🛡️",
     desc: "Zero background tracking until you activate check-in!",
-    bg: "bg-zinc-800 text-white border border-zinc-700/60",
+    image: "/banner/banner3.png",
   },
 ];
 
@@ -656,14 +656,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           <>
             {activeTab === "home" && (
               <HomePage
-                contacts={contacts}
                 activeSession={activeSession}
-                receivedSessions={receivedSessions}
+                contacts={contacts}
                 currentUserPhone={userPhone}
                 onViewLiveFeed={(sessionId) => {
                   setRequestedSharedSessionId(sessionId);
                   setActiveTab("contacts");
                 }}
+                receivedSessions={receivedSessions}
                 currentBanner={currentBanner}
                 setCurrentBanner={setCurrentBanner}
                 banners={BANNERS}
@@ -677,35 +677,35 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
             {activeTab === "session" && (
               <SessionPage
-                sessionHeadingSrc={sessionHeadingSrc}
-                userId={userId}
                 activeSession={activeSession}
-                destination={destination}
-                setDestination={setDestination}
-                setDurationMinutes={setDurationMinutes}
-                userReminderMins={userReminderMins}
-                setUserReminderMins={setUserReminderMins}
                 contactReminderMins={contactReminderMins}
-                setContactReminderMins={setContactReminderMins}
-                notes={notes}
-                setNotes={setNotes}
                 contacts={contacts}
-                selectedContactIds={selectedContactIds}
-                toggleContactSelection={toggleContactSelection}
-                sessionLoading={sessionLoading}
-                handleStartSession={handleStartSession}
+                destination={destination}
                 handleCompleteSession={handleCompleteSession}
                 handleSafeCheckin={handleSafeCheckin}
+                handleStartSession={handleStartSession}
+                notes={notes}
                 onNavigate={setActiveTab}
+                selectedContactIds={selectedContactIds}
+                sessionHeadingSrc={sessionHeadingSrc}
+                sessionLoading={sessionLoading}
+                setContactReminderMins={setContactReminderMins}
+                setDestination={setDestination}
+                setDurationMinutes={setDurationMinutes}
+                setNotes={setNotes}
+                setUserReminderMins={setUserReminderMins}
+                toggleContactSelection={toggleContactSelection}
+                userId={userId}
+                userReminderMins={userReminderMins}
               />
             )}
 
             {activeTab === "contacts" && (
               <ContactsPage
-                userPhone={userPhone}
                 currentUserId={userId}
                 openSessionId={requestedSharedSessionId}
                 onSessionOpened={() => setRequestedSharedSessionId(null)}
+                userPhone={userPhone}
                 contacts={contacts}
                 addingContact={addingContact}
                 manualName={manualName}
@@ -723,12 +723,12 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
             {activeTab === "profile" && (
               <ProfilePage
+                avatarUrl={avatarUrl}
                 fullName={fullName}
                 nickname={nickname}
+                onAvatarChange={(url) => setAvatarUrl(url)}
                 userId={userId}
                 userPhone={userPhone}
-                avatarUrl={avatarUrl}
-                onAvatarChange={(url) => setAvatarUrl(url)}
                 notificationPermission={notificationPermission}
                 locationStatus={locationStatus}
                 locationCoords={locationCoords}

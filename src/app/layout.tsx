@@ -28,11 +28,17 @@ export const metadata: Metadata = {
     apple: "/apple-icon.png",
   },
   openGraph: {
-    title: "Déloci — Consent-Based Safety Check-Ins",
-    description: "Keep the people you trust aware of where you are.",
+    title: "Join Me on Déloci Safety Network 🛡️",
+    description: "Connect with your trusted circle on Déloci to watch over each other safely during travel and walks home.",
     url: "https://deloci.online",
-    siteName: "Déloci",
+    siteName: "Déloci Safety Network",
     images: [
+      {
+        url: "https://deloci.online/og-share.png",
+        width: 1200,
+        height: 630,
+        alt: "Déloci Safety Network Social Share Preview",
+      },
       {
         url: "https://deloci.online/icon.png",
         width: 512,
@@ -40,6 +46,13 @@ export const metadata: Metadata = {
         alt: "Déloci Logo",
       },
     ],
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Join Me on Déloci Safety Network 🛡️",
+    description: "Connect with your trusted circle on Déloci to watch over each other safely.",
+    images: ["https://deloci.online/og-share.png"],
   },
   verification: {
     google: "YOUR_GOOGLE_SEARCH_CONSOLE_CODE_HERE",

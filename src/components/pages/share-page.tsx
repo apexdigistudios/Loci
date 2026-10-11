@@ -12,11 +12,6 @@ interface SharePageProps {
 interface ReferredUser {
   referred_phone: string;
   created_at: string;
-  users?: {
-    full_name: string | null;
-    nickname: string | null;
-    avatar_url: string | null;
-  };
 }
 
 export function SharePage({ nickname, userPhone }: SharePageProps) {
@@ -24,17 +19,14 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
   const [referrals, setReferrals] = useState<ReferredUser[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Preferred identifier for link generation
   const refCode = nickname || userPhone;
 
-  // Generate invite link
   const shareUrl = typeof window !== "undefined"
     ? `${window.location.origin}/join?ref=${encodeURIComponent(refCode)}`
     : `https://deloci.online/join?ref=${encodeURIComponent(refCode)}`;
 
   const shareText = `Hey! Join me on Déloci so we can watch over each other when walking home safely. 🛡️🚀`;
 
-  // Fetch referrals list & total stats from Supabase
   useEffect(() => {
     let isMounted = true;
 
@@ -94,7 +86,7 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
 
   return (
     <div className="space-y-5 pt-1">
-      {/* Page Title */}
+      {/* Page Header */}
       <div>
         <h2 className="text-base font-black text-black dark:text-white flex items-center space-x-1.5">
           <span>Tell Your People About Déloci</span>
@@ -132,50 +124,58 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
         </div>
       </div>
 
-      {/* Main Share Card */}
-      <div className="bg-zinc-900 text-white rounded-[28px] p-6 shadow-xl space-y-5 relative overflow-hidden border border-zinc-800">
+      {/* Redesigned Premium Share Card */}
+      <div className="relative overflow-hidden rounded-4xl bg-linear-to-b from-zinc-900 via-black to-zinc-950 p-6 border border-zinc-800/80 shadow-2xl space-y-6">
+        {/* Glow backdrop effect */}
+        <div className="absolute -top-10 -right-10 w-36 h-36 bg-yellow-400/10 rounded-full blur-3xl pointer-events-none" />
+
         <div className="flex items-center justify-between">
-          <span className="inline-flex items-center space-x-1 text-[9px] font-black uppercase tracking-widest bg-yellow-400 text-black px-2.5 py-1 rounded-full">
-            <Sparkles className="w-3 h-3 text-black" />
-            <span>EXCLUSIVE INVITE</span>
-          </span>
-          <Shield className="w-5 h-5 text-yellow-400" />
+          <div className="inline-flex items-center space-x-1.5 bg-yellow-400/10 border border-yellow-400/30 px-3 py-1 rounded-full">
+            <Sparkles className="w-3.5 h-3.5 text-yellow-400" />
+            <span className="text-[10px] font-black uppercase tracking-wider text-yellow-400">
+              Invite &amp; Protect
+            </span>
+          </div>
+          <div className="w-9 h-9 rounded-full bg-zinc-800/80 border border-zinc-700/50 flex items-center justify-center">
+            <Shield className="w-4 h-4 text-yellow-400" />
+          </div>
         </div>
 
-        <div>
-          <h3 className="text-xl font-black leading-snug tracking-tight text-white">
-            Expand Your Safety Net 🛡️
+        <div className="space-y-1">
+          <h3 className="text-2xl font-black tracking-tight text-white leading-tight">
+            Safety in Numbers 🛡️
           </h3>
-          <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
-            When your friends join Déloci using your link, they are automatically added to your contact pool!
+          <p className="text-xs text-zinc-400 leading-relaxed">
+            Invite your trusted friends. Anyone who registers with your link automatically links with your safety circle.
           </p>
         </div>
 
-        {/* Link Input Box */}
-        <div className="bg-black/60 border border-zinc-800 rounded-2xl p-2.5 flex items-center justify-between space-x-2">
-          <span className="text-xs font-mono text-zinc-300 truncate pl-2 flex-1">
-            {shareUrl}
-          </span>
+        {/* Dynamic Referral Code / Link Box */}
+        <div className="bg-zinc-950/90 border border-zinc-800 rounded-2xl p-2.5 flex items-center justify-between gap-2 shadow-inner">
+          <div className="pl-2 min-w-0">
+            <p className="text-[9px] font-semibold uppercase tracking-widest text-zinc-500">Your Personal Link</p>
+            <p className="text-xs font-mono font-bold text-yellow-400 truncate">{shareUrl}</p>
+          </div>
           <button
             onClick={handleCopyLink}
-            className="p-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-yellow-400 active:scale-90 transition-all shrink-0"
-            title="Copy Link"
+            className="px-3 py-2.5 rounded-xl bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold text-xs active:scale-90 transition-all shrink-0 flex items-center space-x-1.5"
           >
-            {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+            {copied ? <Check className="w-4 h-4 text-black" /> : <Copy className="w-4 h-4 text-black" />}
+            <span>{copied ? "Copied" : "Copy"}</span>
           </button>
         </div>
 
-        {/* Native Share Action Pill */}
+        {/* Share Action Button */}
         <button
           onClick={handleNativeShare}
-          className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-black py-4 rounded-full text-xs transition-all flex items-center justify-center space-x-2 active:scale-[0.97] shadow-lg shadow-yellow-400/20"
+          className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-black py-4 rounded-2xl text-xs tracking-wider uppercase transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-xl shadow-yellow-400/10"
         >
           <Share2 className="w-4 h-4" />
-          <span>SHARE INVITE LINK 🔥</span>
+          <span>SEND INVITE TO FRIENDS</span>
         </button>
       </div>
 
-      {/* Quick Share Options */}
+      {/* Quick Share Buttons */}
       <div className="grid grid-cols-2 gap-2.5">
         <a
           href={`https://wa.me/?text=${encodeURIComponent(`${shareText}${shareUrl}`)}`}
@@ -186,7 +186,7 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
           <Send className="w-5 h-5 shrink-0" />
           <div className="text-left">
             <p className="text-xs font-extrabold text-black dark:text-white">WhatsApp</p>
-            <p className="text-[10px] text-zinc-400">Send to chat squad</p>
+            <p className="text-[10px] text-zinc-400">Share with squad</p>
           </div>
         </a>
 
@@ -202,7 +202,7 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
         </a>
       </div>
 
-      {/* Friends Joined List */}
+      {/* Circle Members Joined List */}
       <div className="pt-2">
         <h4 className="text-xs font-extrabold text-black dark:text-white uppercase tracking-wider mb-3">
           Circle Members Joined ({referrals.length})

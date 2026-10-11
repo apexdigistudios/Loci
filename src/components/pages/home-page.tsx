@@ -31,6 +31,14 @@ interface ReceivedSession {
   expected_arrival_at: string;
 }
 
+interface BannerItem {
+  id: number;
+  tag: string;
+  title: string;
+  desc: string;
+  image: string;
+}
+
 interface HomePageProps {
   contacts: Contact[];
   activeSession: ActiveSession | null;
@@ -39,7 +47,7 @@ interface HomePageProps {
   onViewLiveFeed: (sessionId: string) => void;
   currentBanner: number;
   setCurrentBanner: (i: number) => void;
-  banners: Array<{ id: number; tag: string; title: string; desc: string; bg: string }>;
+  banners: BannerItem[];
   contactsSupported: boolean;
   handlePickDeviceContact: () => void;
   handleCompleteSession: () => void;
@@ -95,8 +103,8 @@ export function HomePage({
 
   return (
     <>
-      {/* Banner Carousel */}
-      <div className="relative overflow-hidden rounded-[26px] shadow-sm">
+      {/* Banner Carousel with Full-Fit Banner Images */}
+      <div className="relative overflow-hidden rounded-[26px] shadow-md bg-black">
         <div
           className="flex transition-transform duration-500 ease-out"
           style={{ transform: `translateX(-${currentBanner * 100}%)` }}
@@ -104,26 +112,42 @@ export function HomePage({
           {banners.map((b) => (
             <div
               key={b.id}
-              className={`min-w-full p-5 ${b.bg} flex flex-col justify-between h-36 rounded-[26px]`}
+              className="min-w-full relative flex flex-col justify-between h-40 rounded-[26px] overflow-hidden p-5 text-white"
             >
-              <div className="space-y-1">
-                <span className="text-[9px] font-black tracking-widest px-2 py-0.5 rounded-full bg-white/10 backdrop-blur-md inline-block">
+              {/* Full Banner Image */}
+              <img
+                src={b.image}
+                alt={b.title}
+                className="absolute inset-0 w-full h-full object-cover object-center pointer-events-none"
+              />
+
+              {/* Dark Overlay Gradient to ensure contrast & sharpness */}
+              <div className="absolute inset-0 bg-linear-to-t from-black/80 via-black/30 to-black/20 pointer-events-none" />
+
+              <div className="relative z-10 space-y-1">
+                <span className="text-[9px] font-black tracking-widest px-2.5 py-0.5 rounded-full bg-black/60 backdrop-blur-md border border-white/20 inline-block uppercase text-yellow-400">
                   {b.tag}
                 </span>
-                <h3 className="text-base font-black tracking-tight leading-snug">{b.title}</h3>
+                <h3 className="text-base font-black tracking-tight leading-snug drop-shadow-md">
+                  {b.title}
+                </h3>
               </div>
-              <p className="text-[11px] font-medium opacity-85 leading-snug">{b.desc}</p>
+
+              <p className="relative z-10 text-[11px] font-medium opacity-90 leading-snug drop-shadow">
+                {b.desc}
+              </p>
             </div>
           ))}
         </div>
 
-        <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 flex space-x-1 z-10">
+        {/* Navigation Dot Indicators */}
+        <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 flex space-x-1.5 z-20">
           {banners.map((_, i) => (
             <button
               key={i}
               onClick={() => setCurrentBanner(i)}
-              className={`h-1 rounded-full transition-all ${
-                currentBanner === i ? "w-4 bg-white" : "w-1 bg-white/30"
+              className={`h-1.5 rounded-full transition-all ${
+                currentBanner === i ? "w-5 bg-yellow-400" : "w-1.5 bg-white/50"
               }`}
             />
           ))}
