@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { User, UserCheck, Phone, Lock, ArrowRight, Loader2, LogIn, ImagePlus, KeyRound, ChevronLeft, ShieldCheck } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { cleanPhone } from "@/lib/utils";
+import { normalizePhone, isValidPhone } from "@/lib/utils";
 import { SplashScreen } from "@/components/splash-screen";
 
 export interface UserData {
@@ -122,10 +122,24 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
   const [detectedCountry, setDetectedCountry] = useState<CountryInfo>(COUNTRIES[0]);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [profileCheckComplete, setProfileCheckComplete] = useState(false);
+  const [profileCheckComplete, setProfileCheckComplete] = useState(() => {
+    if (typeof window === "undefined") return true;
+
+    const savedUser = localStorage.getItem("loci_user_profile");
+    const savedPhone = localStorage.getItem("loci_saved_phone");
+
+    if (!savedUser && !savedPhone) return true;
+
+    try {
+      const cachedPhone = savedUser ? JSON.parse(savedUser).phone || "" : "";
+      return !((cachedPhone || savedPhone || "") && normalizePhone(cachedPhone || savedPhone || ""));
+    } catch {
+      localStorage.removeItem("loci_user_profile");
+      return true;
+    }
+  });
   const [minimumSplashElapsed, setMinimumSplashElapsed] = useState(!showSplash);
 
-  // Revoke preview Object URLs on change/unmount to prevent memory leaks
   useEffect(() => {
     return () => {
       if (avatarPreview) {
@@ -135,10 +149,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
   }, [avatarPreview]);
 
   useEffect(() => {
-    if (!showSplash) {
-      setMinimumSplashElapsed(true);
-      return;
-    }
+    if (!showSplash) return;
     const timer = window.setTimeout(() => setMinimumSplashElapsed(true), 800);
     return () => window.clearTimeout(timer);
   }, [showSplash]);
@@ -155,43 +166,45 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       }
     }
     const savedPhone = typeof window !== "undefined" ? localStorage.getItem("loci_saved_phone") : null;
-    const phoneToVerify = cachedPhone || savedPhone || "";
+    const phoneToVerify = normalizePhone(cachedPhone || savedPhone || "");
 
     if (!phoneToVerify) {
-      setProfileCheckComplete(true);
-    } else {
-      setPhone(phoneToVerify);
-      supabase
-        .from("users")
-        .select("phone, full_name, nickname, avatar_url, pin_hash")
-        .eq("phone", phoneToVerify)
-        .maybeSingle()
-        .then(({ data, error }) => {
-          if (cancelled) return;
-          if (error) {
-            console.error("Profile verification error:", error);
-            setErrorMessage("Could not verify saved profile. Enter your phone number.");
-            setProfileCheckComplete(true);
-            return;
-          }
-          if (data) {
-            setExistingProfile(data);
-            setPhone(data.phone);
-            setAuthStep("pin");
-            if (!data.pin_hash) {
-              setErrorMessage("This profile has no security PIN set.");
-            }
-          } else {
-            localStorage.removeItem("loci_user_profile");
-            localStorage.removeItem("loci_saved_phone");
-            setPhone(phoneToVerify);
-            setIsSignUp(true);
-          }
-          setProfileCheckComplete(true);
-        }, () => {
-          if (!cancelled) setProfileCheckComplete(true);
-        });
+      return () => {
+        cancelled = true;
+      };
     }
+
+    setPhone(phoneToVerify);
+    supabase
+      .from("users")
+      .select("phone, full_name, nickname, avatar_url, pin_hash")
+      .eq("phone", phoneToVerify)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          console.error("Profile verification error:", error);
+          setErrorMessage("Could not verify saved profile. Enter your phone number.");
+          setProfileCheckComplete(true);
+          return;
+        }
+        if (data) {
+          setExistingProfile(data);
+          setPhone(data.phone);
+          setAuthStep("pin");
+          if (!data.pin_hash) {
+            setErrorMessage("This profile has no security PIN set.");
+          }
+        } else {
+          localStorage.removeItem("loci_user_profile");
+          localStorage.removeItem("loci_saved_phone");
+          setPhone(phoneToVerify);
+          setIsSignUp(true);
+        }
+        setProfileCheckComplete(true);
+      }, () => {
+        if (!cancelled) setProfileCheckComplete(true);
+      });
 
     try {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -232,11 +245,15 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     setPhone(val);
 
     const cleanVal = val.trim();
-    if (cleanVal.length >= 2) {
-      const match = COUNTRIES.find((c) => cleanVal.startsWith(c.prefix) || (cleanVal.startsWith("+") && cleanVal.startsWith(c.prefix)));
-      if (match) {
-        setDetectedCountry(match);
-      }
+    if (!cleanVal) return;
+
+    const match = COUNTRIES.find((country) => {
+      const withoutPlus = country.prefix.replace("+", "");
+      return cleanVal.startsWith(country.prefix) || cleanVal.startsWith(withoutPlus);
+    });
+
+    if (match) {
+      setDetectedCountry(match);
     }
   };
 
@@ -246,7 +263,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       const digitsOnly = cleaned.replace(/^0+/, "");
       cleaned = `${detectedCountry.prefix}${digitsOnly}`;
     }
-    return cleaned;
+    return normalizePhone(cleaned);
   };
 
   const handlePhoneLogin = async (e: React.FormEvent) => {
@@ -256,8 +273,8 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     setErrorMessage(null);
     const formattedPhone = formatPhoneNumber(phone);
 
-    if (!cleanPhone(formattedPhone)) {
-      setErrorMessage("Please enter a valid phone number.");
+    if (!isValidPhone(formattedPhone)) {
+      setErrorMessage("Please enter a valid international phone number.");
       return;
     }
 
@@ -392,7 +409,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     const trimmedNickname = nickname.trim();
     const formattedPhone = formatPhoneNumber(phone);
 
-    if (!trimmedFullName || !trimmedNickname || !cleanPhone(formattedPhone)) {
+    if (!trimmedFullName || !trimmedNickname || !isValidPhone(formattedPhone)) {
       setErrorMessage("Please fill in all required fields accurately.");
       return;
     }
@@ -429,7 +446,6 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
         return;
       }
 
-      // Process & aspect-ratio crop avatar image
       let avatarUrl = "";
       const bitmap = await createImageBitmap(avatarFile);
       const canvas = document.createElement("canvas");
@@ -469,6 +485,21 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       );
 
       if (dbError) throw dbError;
+
+      if (typeof window !== "undefined") {
+        const referrerNickname = localStorage.getItem("loci_referrer_nickname");
+        if (referrerNickname) {
+          try {
+            await supabase.rpc("handle_referral_signup", {
+              p_referrer_phone: referrerNickname,
+              p_new_user_phone: formattedPhone,
+            });
+            localStorage.removeItem("loci_referrer_nickname");
+          } catch (refErr) {
+            console.error("Referral linking failed:", refErr);
+          }
+        }
+      }
 
       const userData: UserData = {
         fullName: trimmedFullName,
@@ -662,7 +693,14 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
             disabled={loading}
             className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50 mt-2"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin text-black" /> : <><span>Save Profile &amp; Continue</span><ArrowRight className="w-4 h-4 text-black" /></>}
+            {loading ? (
+              <Loader2 className="w-4 h-4 animate-spin text-black" />
+            ) : (
+              <>
+                <span>Save Profile &amp; Continue</span>
+                <ArrowRight className="w-4 h-4 text-black" />
+              </>
+            )}
           </button>
         </form>
       ) : authStep === "legacy-pin" && existingProfile ? (
@@ -727,7 +765,14 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
             disabled={loading || pin.length !== 4 || confirmPin.length !== 4}
             className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><ShieldCheck className="w-4 h-4" /><span>Save Security PIN</span></>}
+            {loading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <>
+                <ShieldCheck className="w-4 h-4" />
+                <span>Save Security PIN</span>
+              </>
+            )}
           </button>
           <button
             type="button"
@@ -785,7 +830,14 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
             disabled={loading || loginPin.length !== 4}
             className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><LogIn className="w-4 h-4" /><span>Unlock Déloci</span></>}
+            {loading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <>
+                <LogIn className="w-4 h-4" />
+                <span>Unlock Déloci</span>
+              </>
+            )}
           </button>
           <button
             type="button"
@@ -840,7 +892,14 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
             disabled={loading}
             className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50 mt-2"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin text-black" /> : <><LogIn className="w-4 h-4 text-black" /><span>Log In</span></>}
+            {loading ? (
+              <Loader2 className="w-4 h-4 animate-spin text-black" />
+            ) : (
+              <>
+                <LogIn className="w-4 h-4 text-black" />
+                <span>Log In</span>
+              </>
+            )}
           </button>
         </form>
       )}
@@ -856,9 +915,13 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
             className="text-xs font-bold text-zinc-500 hover:text-black dark:hover:text-white transition-colors"
           >
             {isSignUp ? (
-              <span>Already have an account? <strong className="text-yellow-500 underline">Log In</strong></span>
+              <span>
+                Already have an account? <strong className="text-yellow-500 underline">Log In</strong>
+              </span>
             ) : (
-              <span>Don't have an account? <strong className="text-yellow-500 underline">Create Profile</strong></span>
+              <span>
+                Don&apos;t have an account? <strong className="text-yellow-500 underline">Create Profile</strong>
+              </span>
             )}
           </button>
         </div>

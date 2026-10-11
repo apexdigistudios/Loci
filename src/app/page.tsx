@@ -347,7 +347,7 @@ export default function Home() {
               </p>
 
               <p>
-                connecting with new people and stepping out should bring excitement, not fear. i wanted to build a way for anyone to step into any situation — from late commutes to first dates — knowing that their <strong className="font-extrabold text-black dark:text-white">trusted circle is silently watching over them</strong>, ready to be alerted the exact moment something feels off.
+                connecting with new people and stepping out should bring excitement, not fear. we wanted to build a way for anyone to step into any situation — from late commutes to first dates — knowing that their <strong className="font-extrabold text-black dark:text-white">trusted circle is silently watching over them</strong>, ready to be alerted the exact moment something feels off.
               </p>
 
               <p>
@@ -355,7 +355,7 @@ export default function Home() {
               </p>
 
               <p>
-                we dedicated myself to creating déloci to offer real reassurance to distant loved ones and help ensure that when something goes wrong, the right people know fast.
+                we dedicated ourselves to creating déloci to offer real reassurance to distant loved ones and help ensure that when something goes wrong, the right people know fast.
               </p>
 
               <p className="font-bold text-black dark:text-white pt-2">
