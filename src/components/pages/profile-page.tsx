@@ -60,61 +60,111 @@ export function ProfilePage({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { theme, setTheme } = useTheme();
 
-  // Compress image on canvas before upload for instant response
-  const compressAndUpload = async (file: File) => {
+  // Fast client-side image compression using HTMLImageElement and Canvas
+  const compressImage = (file: File, maxSize = 250): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          let width = img.width;
+          let height = img.height;
+
+          // Maintain aspect ratio while clamping dimensions
+          if (width > height) {
+            if (width > maxSize) {
+              height = Math.round((height * maxSize) / width);
+              width = maxSize;
+            }
+          } else {
+            if (height > maxSize) {
+              width = Math.round((width * maxSize) / height);
+              height = maxSize;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            reject(new Error("Could not get canvas context"));
+            return;
+          }
+
+          ctx.drawImage(img, 0, 0, width, height);
+          canvas.toBlob(
+            (blob) => {
+              if (blob) resolve(blob);
+              else reject(new Error("Image compression failed"));
+            },
+            "image/jpeg",
+            0.75 // 75% quality offers instant network transfers
+          );
+        };
+        img.onerror = () => reject(new Error("Failed to load image"));
+        img.src = event.target?.result as string;
+      };
+      reader.onerror = () => reject(new Error("Failed to read file"));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
     setUploadingAvatar(true);
 
     try {
-      const bitmap = await createImageBitmap(file);
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
+      // 1. Fast local compression (<100 KB payload)
+      const compressedBlob = await compressImage(file);
 
-      const size = 300;
-      canvas.width = size;
-      canvas.height = size;
+      // 2. Immediate optimistic preview for fluid UX
+      const localPreviewUrl = URL.createObjectURL(compressedBlob);
+      setCurrentAvatar(localPreviewUrl);
 
-      if (ctx) {
-        ctx.drawImage(bitmap, 0, 0, size, size);
-      }
-
-      const blob = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob(resolve, "image/jpeg", 0.8)
-      );
-
-      if (!blob) throw new Error("Compression failed");
-
+      // 3. Upload to Supabase bucket
       const sanitizedPhone = userPhone.replace(/[^a-zA-Z0-9]/g, "");
       const filePath = `${sanitizedPhone}.jpg`;
 
       const { error: uploadError } = await supabase.storage
         .from("avatars")
-        .upload(filePath, blob, { upsert: true, contentType: "image/jpeg" });
+        .upload(filePath, compressedBlob, {
+          upsert: true,
+          contentType: "image/jpeg",
+          cacheControl: "3600",
+        });
 
       if (uploadError) throw uploadError;
 
+      // 4. Fetch persistent public URL
       const { data: publicUrlData } = supabase.storage
         .from("avatars")
         .getPublicUrl(filePath);
 
       const publicUrl = `${publicUrlData.publicUrl}?t=${Date.now()}`;
 
-      await supabase
+      // 5. Sync user database record
+      const { error: dbError } = await supabase
         .from("users")
         .update({ avatar_url: publicUrl })
         .eq("phone", userPhone);
 
+      if (dbError) throw dbError;
+
       setCurrentAvatar(publicUrl);
       if (onAvatarChange) onAvatarChange(publicUrl);
     } catch (err) {
-      console.error("Avatar upload failed:", err);
+      console.error("Avatar upload error:", err);
+      // Revert back to original avatar on error
+      setCurrentAvatar(avatarUrl);
+      alert("Failed to upload image. Please ensure your connection is active and try again.");
     } finally {
       setUploadingAvatar(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) compressAndUpload(file);
   };
 
   return (
@@ -122,7 +172,7 @@ export function ProfilePage({
       <input
         type="file"
         ref={fileInputRef}
-        accept="image/*"
+        accept="image/jpeg,image/png,image/webp,image/heic"
         onChange={handleFileChange}
         className="hidden"
       />
@@ -189,10 +239,15 @@ export function ProfilePage({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="absolute bottom-0 right-0 p-2 rounded-full bg-yellow-400 text-black shadow-md border-2 border-white dark:border-black active:scale-90 transition-all"
+                disabled={uploadingAvatar}
+                className="absolute bottom-0 right-0 p-2 rounded-full bg-yellow-400 text-black shadow-md border-2 border-white dark:border-black active:scale-90 transition-all disabled:opacity-50"
                 title="Upload Photo"
               >
-                <Camera className="w-3.5 h-3.5 stroke-[2.5]" />
+                {uploadingAvatar ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-black" />
+                ) : (
+                  <Camera className="w-3.5 h-3.5 stroke-[2.5]" />
+                )}
               </button>
             </div>
 
@@ -389,20 +444,18 @@ export function ProfilePage({
                 </span>
                 <p className="text-[9px] text-zinc-400">Reset in browser settings</p>
               </div>
+            ) : locationStatus === "requesting" ? (
+              <span className="inline-flex items-center space-x-1.5 text-[10px] font-black text-yellow-500">
+                <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+                <span>Acquiring High-Precision GPS...</span>
+              </span>
             ) : (
-              locationStatus === "requesting" ? (
-                <span className="inline-flex items-center space-x-1.5 text-[10px] font-black text-yellow-500">
-                  <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
-                  <span>Acquiring High-Precision GPS...</span>
-                </span>
-              ) : (
-                <button
-                  onClick={triggerLocationPrompt}
-                  className="bg-yellow-400 text-black font-black px-3 py-1.5 rounded-full text-xs active:scale-95 transition-all shadow-sm"
-                >
-                  Allow 📍
-                </button>
-              )
+              <button
+                onClick={triggerLocationPrompt}
+                className="bg-yellow-400 text-black font-black px-3 py-1.5 rounded-full text-xs active:scale-95 transition-all shadow-sm"
+              >
+                Allow 📍
+              </button>
             )}
           </div>
         </div>

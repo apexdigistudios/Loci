@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Home, Shield, Users, Share2, User } from "lucide-react";
+import { Home, Shield, Users, Share2, User, Bell } from "lucide-react";
 import { useTheme } from "next-themes";
 import { supabase } from "@/lib/supabase";
 import { cleanPhone } from "@/lib/utils";
@@ -20,6 +20,7 @@ import { SessionPage } from "@/components/pages/session-page";
 import { ContactsPage, Contact } from "@/components/pages/contacts-page";
 import { SharePage } from "@/components/pages/share-page";
 import { ProfilePage } from "@/components/pages/profile-page";
+import { NotificationsPage } from "@/components/pages/notifications-page";
 
 interface MainAppProps {
   userPhone: string;
@@ -75,7 +76,7 @@ const BANNERS = [
 ];
 
 export function MainApp({ userPhone, onLogout }: MainAppProps) {
-  const [activeTab, setActiveTab] = useState<"home" | "session" | "contacts" | "share" | "profile">("home");
+  const [activeTab, setActiveTab] = useState<"home" | "session" | "contacts" | "share" | "profile" | "notifications">("home");
   const [nickname, setNickname] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
   const [fullName, setFullName] = useState("");
@@ -616,7 +617,19 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             <img src="/loci-dark.png" alt="Déloci Logo" className="hidden h-10 w-auto object-contain shrink-0 dark:block" />
           </div>
 
-          <div className="flex justify-end items-center">
+          <div className="flex justify-end items-center space-x-1.5">
+            <button
+              onClick={() => setActiveTab("notifications")}
+              className={`p-2 rounded-full transition-all active:scale-90 border ${
+                activeTab === "notifications"
+                  ? "border-yellow-400 bg-yellow-400/10 text-yellow-500"
+                  : "border-transparent text-zinc-400 hover:text-black dark:hover:text-white"
+              }`}
+              title="Alerts & Notifications"
+            >
+              <Bell className="w-4 h-4" />
+            </button>
+
             <button
               onClick={() => setActiveTab("profile")}
               className={`p-0.5 rounded-full transition-all active:scale-90 border ${
@@ -736,6 +749,13 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
                 triggerLocationPrompt={triggerLocationPrompt}
                 onTestPush={handleTestPush}
                 onLogout={onLogout}
+              />
+            )}
+
+            {activeTab === "notifications" && (
+              <NotificationsPage
+                userPhone={userPhone}
+                onBack={() => setActiveTab("home")}
               />
             )}
           </>

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { Capacitor } from "@capacitor/core";
 import {
@@ -96,13 +96,11 @@ export default function Home() {
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
 
   useEffect(() => {
-    // 1. Check saved session
     const savedPhone = localStorage.getItem("loci_user_phone");
     if (savedPhone) {
       setUserPhone(savedPhone);
     }
 
-    // 2. Detect Native App (Capacitor) OR PWA Standalone Mode
     const isNative = Capacitor.isNativePlatform();
     const isStandalone =
       isNative ||
@@ -124,7 +122,6 @@ export default function Home() {
       };
     }
 
-    // 3. Capture install prompt (for web visitors)
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e as BeforeInstallPromptEvent);
@@ -164,7 +161,6 @@ export default function Home() {
     setOpenFaqIndex(openFaqIndex === index ? null : index);
   };
 
-  // --- NATIVE APP / PWA ROUTING (Bypasses landing page entirely) ---
   if (isPWA) {
     if (!userPhone) {
       return <Login onSuccess={handleLoginSuccess} showSplash={false} />;
@@ -172,7 +168,6 @@ export default function Home() {
     return <MainApp userPhone={userPhone} onLogout={handleLogout} />;
   }
 
-  // --- LANDING PAGE (Web Browser Visitors Only) ---
   return (
     <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between font-sans antialiased selection:bg-yellow-400 selection:text-black">
       <InstallModal

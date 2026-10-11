@@ -39,12 +39,6 @@ export const metadata: Metadata = {
         height: 630,
         alt: "Déloci Safety Network Social Share Preview",
       },
-      {
-        url: "https://deloci.online/icon.png",
-        width: 512,
-        height: 512,
-        alt: "Déloci Logo",
-      },
     ],
     type: "website",
   },
