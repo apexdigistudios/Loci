@@ -102,6 +102,7 @@ export function SessionPage({
   onNavigate,
 }: SessionPageProps) {
   const [currentStep, setCurrentStep] = useState<number>(1);
+  const [isCheckingIn, setIsCheckingIn] = useState<boolean>(false);
 
   const [attachedMedia, setAttachedMedia] = useState<{
     file: File;
@@ -408,13 +409,43 @@ export function SessionPage({
     }
   }, [activeSession, userId, isSafetyCheckinDue, targetEndTime, clockNow, guardianUserIds]);
 
-  const onConfirmSafeClick = () => {
-    lastCheckinPushRef.current = 0;
-    handleSafeCheckin();
+  const handleCheckInClick = async () => {
+    if (isCheckingIn) return;
+    setIsCheckingIn(true);
+    try {
+      lastCheckinPushRef.current = 0;
+      await Promise.resolve(handleSafeCheckin());
+
+      if (userId) {
+        void sendPushAlert(
+          userId,
+          "Check-In Confirmed ✅",
+          "You have successfully confirmed you are safe."
+        );
+      }
+
+      if (guardianUserIds.length > 0) {
+        void sendPushAlert(
+          guardianUserIds,
+          "Guardian Check-In Update 🟢",
+          `Your contact has checked in safely for their trip to ${activeSession?.destination || "their destination"}.`
+        );
+      }
+    } finally {
+      setTimeout(() => setIsCheckingIn(false), 800);
+    }
   };
 
   const onEndSessionClick = async () => {
     handleCompleteSession();
+
+    if (userId) {
+      void sendPushAlert(
+        userId,
+        "Session Ended Successfully ✅",
+        "Your safety watch session has been completed and closed."
+      );
+    }
 
     if (guardianUserIds.length > 0) {
       void sendPushAlert(
@@ -690,10 +721,18 @@ export function SessionPage({
               {isSafetyCheckinDue ? (
                 <button
                   type="button"
-                  onClick={onConfirmSafeClick}
-                  className="w-full max-w-sm bg-yellow-400 hover:bg-yellow-300 text-black px-5 py-4 rounded-2xl font-black text-base shadow-lg shadow-yellow-400/30 active:scale-[0.98]"
+                  onClick={handleCheckInClick}
+                  disabled={isCheckingIn}
+                  className="w-full max-w-sm bg-yellow-400 hover:bg-yellow-300 text-black px-5 py-4 rounded-2xl font-black text-base shadow-lg shadow-yellow-400/30 active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-2"
                 >
-                  Confirm I’m Safe
+                  {isCheckingIn ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin text-black" />
+                      <span>Confirming...</span>
+                    </>
+                  ) : (
+                    <span>Confirm I’m Safe</span>
+                  )}
                 </button>
               ) : (
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xs leading-relaxed">
