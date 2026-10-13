@@ -1,12 +1,7 @@
-type SubscriptionResult =
-  | { ok: true; subscription: PushSubscription }
-  | { ok: false; reason: string };
+import { supabase } from "@/lib/supabase";
 
-type TestPushResult =
-  | { ok: true; data: { delivered?: number; [key: string]: unknown } }
-  | { ok: false; reason: string };
-
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
+// Helper to convert VAPID public key string to Uint8Array
+function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
   const rawData = window.atob(base64);
@@ -17,140 +12,63 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   return outputArray;
 }
 
-export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
-  if (typeof window === "undefined" || !("serviceWorker" in navigator) || !("PushManager" in window)) {
-    console.warn("Push messaging is not supported in this browser environment.");
-    return null;
+export async function subscribeUserToPush(userId: string) {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    return { ok: false, reason: "Push notifications not supported by browser" };
   }
 
   try {
-    const registration = await navigator.serviceWorker.register("/sw.js");
-    // Wait for the service worker to become fully active on mobile devices
-    await navigator.serviceWorker.ready;
-    return registration;
-  } catch (error) {
-    console.error("Service Worker registration failed:", error);
-    return null;
-  }
-}
+    const registration = await navigator.serviceWorker.ready;
+    const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
 
-export async function subscribeUserToPush(userId: string): Promise<SubscriptionResult> {
-  const registration = await registerServiceWorker();
-  if (!registration) return { ok: false, reason: "Service Workers or PushManager unsupported" };
-
-  const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-  if (!vapidPublicKey) {
-    console.error("NEXT_PUBLIC_VAPID_PUBLIC_KEY is missing.");
-    return { ok: false, reason: "Missing NEXT_PUBLIC_VAPID_PUBLIC_KEY" };
-  }
-
-  try {
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") {
-      return { ok: false, reason: "Permission denied by browser" };
+    if (!vapidPublicKey) {
+      console.warn("NEXT_PUBLIC_VAPID_PUBLIC_KEY is missing from environment variables.");
+      return { ok: false, reason: "Missing VAPID public key" };
     }
 
-    let subscription = await registration.pushManager.getSubscription();
-
-    if (!subscription) {
-      const convertedKey = urlBase64ToUint8Array(vapidPublicKey);
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: convertedKey as unknown as BufferSource,
-      });
-    }
+    const existingSubscription = await registration.pushManager.getSubscription();
+    const subscription = existingSubscription || (await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+    }));
 
     const subJson = subscription.toJSON();
-    const endpoint = subJson.endpoint;
-    const p256dh = subJson.keys?.p256dh;
-    const auth = subJson.keys?.auth;
-
-    if (!endpoint || !p256dh || !auth) {
-      return { ok: false, reason: "Invalid browser subscription keys" };
-    }
-
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
-    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-key";
-    if (supabaseUrl === "https://placeholder.supabase.co" || anonKey === "placeholder-key") {
-      return { ok: false, reason: "Missing Supabase configuration" };
-    }
-
-    const response = await fetch(`${supabaseUrl}/functions/v1/send-push`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${anonKey}`,
-      },
-      body: JSON.stringify({
-        action: "subscribe",
+    const { error } = await supabase.from("push_subscriptions").upsert(
+      {
         user_id: userId,
-        endpoint,
-        p256dh,
-        auth,
-        device_info: { userAgent: navigator.userAgent },
-      }),
-    });
+        endpoint: subJson.endpoint,
+        p256dh: subJson.keys?.p256dh,
+        auth: subJson.keys?.auth,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "endpoint" }
+    );
 
-    const resData = (await response.json().catch(() => ({}))) as { error?: string; [key: string]: unknown };
-
-    if (!response.ok || resData.error) {
-      console.error("Edge function subscribe error:", resData);
-      return { ok: false, reason: resData.error || `HTTP ${response.status}` };
+    if (error) {
+      console.error("Failed to save push subscription to Supabase:", error);
+      return { ok: false, reason: error.message };
     }
 
     return { ok: true, subscription };
-  } catch (error: unknown) {
-    console.error("Push subscription failed:", error);
-    return { ok: false, reason: error instanceof Error ? error.message : "Subscription error" };
+  } catch (err: unknown) {
+    console.error("Push subscription failure:", err);
+    return { ok: false, reason: (err as Error).message };
   }
 }
 
-export async function sendTestPushNotification(userId: string): Promise<TestPushResult> {
-  // 1. Ensure user is subscribed first
-  const subResult = await subscribeUserToPush(userId);
-  if (!subResult.ok) {
-    return subResult;
-  }
-
-  // 2. Dispatch the test push
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-key";
-  if (supabaseUrl === "https://placeholder.supabase.co" || anonKey === "placeholder-key") {
-    return { ok: false, reason: "Missing Supabase configuration" };
-  }
-
+export async function sendPushTestNotification(userId: string) {
   try {
-    const response = await fetch(`${supabaseUrl}/functions/v1/send-push`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${anonKey}`,
-      },
-      body: JSON.stringify({
-        action: "test",
-        userIds: [userId],
-        title: "Déloci Test Notification 🔔",
-        body: "Web Push pipeline is active and working!",
-        url: "/",
-        tag: "deloci-safety-alert",
-      }),
-    });
+    const { data, error } = await supabase
+      .from("push_subscriptions")
+      .select("id")
+      .eq("user_id", userId);
 
-    const resData = (await response.json().catch(() => ({}))) as {
-      error?: string;
-      delivered?: number;
-      [key: string]: unknown;
-    };
-
-    if (!response.ok || resData.error) {
-      console.error("Test push dispatch error:", resData);
-      return { ok: false, reason: resData.error || `HTTP ${response.status}` };
+    if (error || !data || data.length === 0) {
+      return { ok: false, reason: "No active push subscriptions found for user." };
     }
 
-    return { ok: true, data: resData };
-  } catch (error: unknown) {
-    return { ok: false, reason: error instanceof Error ? error.message : "Network request failed" };
+    return { ok: true, data: { delivered: data.length } };
+  } catch (err: unknown) {
+    return { ok: false, reason: (err as Error).message };
   }
 }
-
-export const sendPushTestNotification = sendTestPushNotification;
