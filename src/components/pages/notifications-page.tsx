@@ -1,41 +1,52 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Bell, ShieldAlert, CheckCircle2, Clock, Trash2, ChevronLeft, Loader2 } from "lucide-react";
+import { Bell, ShieldAlert, CheckCircle2, Clock, Trash2, ChevronLeft, Loader2, Check } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
 interface NotificationItem {
   id: string;
+  user_id?: string | null;
   title: string;
   message: string;
-  type: "alert" | "checkin" | "system";
+  type: "alert" | "checkin" | "system" | "session";
   created_at: string;
   read?: boolean;
+  is_read?: boolean;
 }
 
 interface NotificationsPageProps {
   userPhone: string;
+  userId: string | null;
   onBack: () => void;
 }
 
-export function NotificationsPage({ userPhone, onBack }: NotificationsPageProps) {
+export function NotificationsPage({ userPhone, userId, onBack }: NotificationsPageProps) {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [clearingAll, setClearingAll] = useState(false);
 
   useEffect(() => {
+    const ownerFilter = userId
+      ? `user_phone.eq.${userPhone},user_id.eq.${userId}`
+      : `user_phone.eq.${userPhone}`;
+
     async function fetchNotifications() {
       setLoading(true);
       try {
         const { data, error } = await supabase
           .from("notifications")
           .select("*")
-          .eq("user_phone", userPhone)
+          .or(ownerFilter)
           .order("created_at", { ascending: false });
 
         if (!error && data) {
-          setNotifications(data as NotificationItem[]);
+          const items = (data as NotificationItem[]).map((item) => {
+            const isRead = item.is_read ?? item.read ?? false;
+            return { ...item, is_read: isRead, read: isRead };
+          });
+          setNotifications(items);
         } else if (error) {
           console.error("Failed to load notifications:", error);
           setNotifications([]);
@@ -48,21 +59,57 @@ export function NotificationsPage({ userPhone, onBack }: NotificationsPageProps)
       }
     }
 
-    fetchNotifications();
-  }, [userPhone]);
+    queueMicrotask(() => void fetchNotifications());
+    const channel = supabase
+      .channel(`notification-list:${userId ?? userPhone}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "notifications" },
+        () => void fetchNotifications()
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [userId, userPhone]);
+
+  const handleMarkRead = async (id: string) => {
+    const previous = notifications;
+    setNotifications((current) => current.map((item) =>
+      item.id === id ? { ...item, is_read: true, read: true } : item
+    ));
+    const ownerFilter = userId
+      ? `user_phone.eq.${userPhone},user_id.eq.${userId}`
+      : `user_phone.eq.${userPhone}`;
+    const { error } = await supabase
+      .from("notifications")
+      .update({ is_read: true })
+      .eq("id", id)
+      .or(ownerFilter);
+
+    if (error) {
+      console.error("Failed to mark notification as read:", error);
+      setNotifications(previous);
+    }
+  };
 
   const handleDeleteOne = async (id: string) => {
     setDeletingId(id);
+    const previous = notifications;
+    setNotifications((current) => current.filter((item) => item.id !== id));
+    const ownerFilter = userId
+      ? `user_phone.eq.${userPhone},user_id.eq.${userId}`
+      : `user_phone.eq.${userPhone}`;
     const { error } = await supabase
       .from("notifications")
       .delete()
       .eq("id", id)
-      .eq("user_phone", userPhone);
+      .or(ownerFilter);
 
-    if (!error) {
-      setNotifications((prev) => prev.filter((item) => item.id !== id));
-    } else {
+    if (error) {
       console.error("Failed to delete notification:", error);
+      setNotifications(previous);
     }
     setDeletingId(null);
   };
@@ -70,16 +117,19 @@ export function NotificationsPage({ userPhone, onBack }: NotificationsPageProps)
   const handleClearAll = async () => {
     if (notifications.length === 0) return;
     setClearingAll(true);
-
+    const previous = notifications;
+    setNotifications([]);
+    const ownerFilter = userId
+      ? `user_phone.eq.${userPhone},user_id.eq.${userId}`
+      : `user_phone.eq.${userPhone}`;
     const { error } = await supabase
       .from("notifications")
       .delete()
-      .eq("user_phone", userPhone);
+      .or(ownerFilter);
 
-    if (!error) {
-      setNotifications([]);
-    } else {
+    if (error) {
       console.error("Failed to clear notifications:", error);
+      setNotifications(previous);
     }
     setClearingAll(false);
   };
@@ -170,18 +220,31 @@ export function NotificationsPage({ userPhone, onBack }: NotificationsPageProps)
               </div>
 
               {/* Individual Delete Action */}
-              <button
-                onClick={() => handleDeleteOne(item.id)}
-                disabled={deletingId === item.id}
-                className="p-1.5 text-zinc-400 hover:text-red-500 transition-colors shrink-0 rounded-lg active:scale-90"
-                title="Delete Notification"
-              >
-                {deletingId === item.id ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="w-3.5 h-3.5" />
+              <div className="flex items-center shrink-0">
+                {!item.is_read && (
+                  <button
+                    onClick={() => handleMarkRead(item.id)}
+                    className="p-1.5 text-zinc-400 hover:text-emerald-500 transition-colors rounded-lg active:scale-90"
+                    title="Mark as read"
+                    aria-label={`Mark ${item.title} as read`}
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
                 )}
-              </button>
+                <button
+                  onClick={() => handleDeleteOne(item.id)}
+                  disabled={deletingId === item.id}
+                  className="p-1.5 text-zinc-400 hover:text-red-500 transition-colors rounded-lg active:scale-90"
+                  title="Delete Notification"
+                  aria-label={`Delete ${item.title}`}
+                >
+                  {deletingId === item.id ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </div>
             </div>
           ))}
         </div>

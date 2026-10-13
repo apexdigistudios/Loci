@@ -71,6 +71,57 @@ create table if not exists public.session_recipients (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.notifications (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references public.users(id) on delete cascade,
+  user_phone text references public.users(phone) on delete cascade,
+  title text not null,
+  message text not null,
+  type text not null default 'system',
+  is_read boolean not null default false,
+  created_at timestamptz not null default now(),
+  constraint notifications_owner_required check (user_id is not null or user_phone is not null)
+);
+
+alter table public.notifications
+  add column if not exists user_id uuid references public.users(id) on delete cascade,
+  add column if not exists user_phone text references public.users(phone) on delete cascade,
+  add column if not exists title text not null default '',
+  add column if not exists message text not null default '',
+  add column if not exists type text not null default 'system',
+  add column if not exists is_read boolean not null default false,
+  add column if not exists created_at timestamptz not null default now();
+
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'notifications'
+      and column_name = 'read'
+  ) then
+    execute 'update public.notifications set is_read = "read" where is_read is distinct from "read"';
+  end if;
+end $$;
+
+create index if not exists notifications_user_phone_created_at_idx
+  on public.notifications(user_phone, created_at desc);
+create index if not exists notifications_user_id_created_at_idx
+  on public.notifications(user_id, created_at desc);
+
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
+    and not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'notifications'
+    ) then
+    alter publication supabase_realtime add table public.notifications;
+  end if;
+end $$;
+
 create table if not exists public.user_push_subscriptions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references public.users(id) on delete cascade,

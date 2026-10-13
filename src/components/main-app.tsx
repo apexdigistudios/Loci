@@ -85,6 +85,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
   const [activeSession, setActiveSession] = useState<ActiveSession | null>(null);
   const [receivedSessions, setReceivedSessions] = useState<ReceivedSession[]>([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
 
   const [destination, setDestination] = useState("");
   const [durationMinutes, setDurationMinutes] = useState<number | "">(30);
@@ -278,6 +279,41 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     loadUserData();
   }, [loadUserData]);
 
+  const fetchUnreadNotificationCount = useCallback(async () => {
+    const ownerFilter = userId
+      ? `user_phone.eq.${userPhone},user_id.eq.${userId}`
+      : `user_phone.eq.${userPhone}`;
+
+    const { count, error } = await supabase
+      .from("notifications")
+      .select("id", { count: "exact", head: true })
+      .eq("is_read", false)
+      .or(ownerFilter);
+
+    if (error) {
+      console.error("Failed to load unread notification count:", error);
+      return;
+    }
+    setUnreadNotificationCount(count ?? 0);
+  }, [userId, userPhone]);
+
+  useEffect(() => {
+    queueMicrotask(() => void fetchUnreadNotificationCount());
+
+    const channel = supabase
+      .channel(`notifications:${userId ?? userPhone}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "notifications" },
+        () => void fetchUnreadNotificationCount()
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [fetchUnreadNotificationCount, userId, userPhone]);
+
   const fetchReceivedSessions = useCallback(async () => {
     const contactPhones = new Set(contacts
       .map((contact) => cleanPhone(contact.phone))
@@ -449,22 +485,26 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     const senderDisplayName = nickname || fullName || "Your friend";
     void onSessionStarted(senderDisplayName, destName, targetPhones);
 
-    // Insert into notifications table with explicit error handling & fallback keys
-    const { error: notifError } = await supabase.from("notifications").insert([
-      {
-        user_phone: userPhone,
-        user_id: userId,
-        title: "Session Started 🚀",
-        message: `Your safety watch session to ${destName} is active.`,
-        type: "session",
-        read: false,
-        is_read: false,
-        created_at: new Date().toISOString(),
-      }
-    ]);
+    try {
+      const { data: notification, error: notifError } = await supabase
+        .from("notifications")
+        .insert({
+          user_phone: userPhone,
+          user_id: userId,
+          title: "Session Started 🚀",
+          message: `Your safety watch session to ${destName} is active.`,
+          type: "session",
+          is_read: false,
+          created_at: new Date().toISOString(),
+        })
+        .select("id")
+        .single();
 
-    if (notifError) {
-      console.error("Supabase Notification Insert Error:", notifError);
+      if (notifError || !notification) {
+        console.error("Failed to insert session notification:", notifError ?? "No notification row returned");
+      }
+    } catch (error) {
+      console.error("Failed to insert session notification:", error);
     }
 
     try {
@@ -640,10 +680,16 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
                 activeTab === "notifications"
                   ? "border-yellow-400 bg-yellow-400/10 text-yellow-500"
                   : "border-transparent text-zinc-400 hover:text-black dark:hover:text-white"
-              }`}
+              } relative`}
               title="Alerts & Notifications"
+              aria-label={`Alerts & Notifications${unreadNotificationCount > 0 ? `, ${unreadNotificationCount} unread` : ""}`}
             >
               <Bell className="w-4 h-4" />
+              {unreadNotificationCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold leading-4 text-center">
+                  {unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}
+                </span>
+              )}
             </button>
 
             <button
@@ -771,6 +817,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             {activeTab === "notifications" && (
               <NotificationsPage
                 userPhone={userPhone}
+                userId={userId}
                 onBack={() => setActiveTab("home")}
               />
             )}
