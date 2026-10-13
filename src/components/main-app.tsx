@@ -449,20 +449,22 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     const senderDisplayName = nickname || fullName || "Your friend";
     void onSessionStarted(senderDisplayName, destName, targetPhones);
 
-    // Insert into notifications table so bell badge lights up and notifications page populates
-    try {
-      await supabase.from("notifications").insert([
-        {
-          user_phone: userPhone,
-          title: "Session Started 🚀",
-          message: `Your safety watch session to ${destName} is active.`,
-          type: "session",
-          read: false,
-          created_at: new Date().toISOString(),
-        }
-      ]);
-    } catch (notifErr) {
-      console.error("Failed to insert session start notification:", notifErr);
+    // Insert into notifications table with explicit error handling & fallback keys
+    const { error: notifError } = await supabase.from("notifications").insert([
+      {
+        user_phone: userPhone,
+        user_id: userId,
+        title: "Session Started 🚀",
+        message: `Your safety watch session to ${destName} is active.`,
+        type: "session",
+        read: false,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      }
+    ]);
+
+    if (notifError) {
+      console.error("Supabase Notification Insert Error:", notifError);
     }
 
     try {
