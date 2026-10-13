@@ -1,96 +1,96 @@
-const CACHE_NAME = "deloci-cache-v1";
-const OFFLINE_URL = "/offline.html";
+const CACHE_NAME = 'deloci-v1';
+const STATIC_ASSETS = [
+  '/',
+  '/manifest.json'
+];
 
-// 1. INSTALLATION: Pre-cache offline page safely & skip waiting
-self.addEventListener("install", (event) => {
-  event.waitUntil(Promise.all([
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.add(OFFLINE_URL).catch((err) => {
-        console.warn("Offline page caching failed safely:", err);
-      });
-    }),
-    self.skipWaiting(),
-  ]));
+// Install event - safe individual asset caching
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then(async (cache) => {
+      for (const asset of STATIC_ASSETS) {
+        try {
+          await cache.add(asset);
+        } catch (err) {
+          console.warn(`[ServiceWorker] Skipped caching failed asset: ${asset}`, err);
+        }
+      }
+    })
+  );
+  self.skipWaiting();
 });
 
-// 2. ACTIVATION: Clean up old caches & claim clients immediately
-self.addEventListener("activate", (event) => {
+// Activate event - clean up old caches and claim control
+self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
+    caches.keys().then((keys) => {
+      return Promise.all(
         keys.map((key) => {
-          if (key !== CACHE_NAME) return caches.delete(key);
+          if (key !== CACHE_NAME) {
+            return caches.delete(key);
+          }
         })
-      )
-    ).then(() => self.clients.claim())
+      );
+    }).then(() => self.clients.claim())
   );
 });
 
-// 3. FETCH INTERCEPTION: Serve offline.html when network drops during navigation
-self.addEventListener("fetch", (event) => {
-  if (event.request.mode === "navigate") {
-    event.respondWith(
-      fetch(event.request).catch(() => caches.match(OFFLINE_URL))
-    );
-  }
+// Fetch event - network first, falling back to cache
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return;
+
+  event.respondWith(
+    fetch(event.request)
+      .catch(() => {
+        return caches.match(event.request).then((cachedResponse) => {
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+          if (event.request.mode === 'navigate') {
+            return caches.match('/');
+          }
+        });
+      })
+  );
 });
 
-// 4. PUSH NOTIFICATION: Receive & display safety alerts
-self.addEventListener("push", (event) => {
-  if (!event.data) return;
-
-  let payload = {
-    title: "Déloci Safety Alert",
-    body: "Safety check-in required",
-    url: "/",
-    tag: "deloci-safety-alert",
-  };
-
+// Push notification event listener
+self.addEventListener('push', (event) => {
+  let data = { title: 'Déloci Alert', body: 'You have a new notification.', url: '/' };
   try {
-    payload = event.data.json();
+    if (event.data) {
+      data = event.data.json();
+    }
   } catch (e) {
-    payload.body = event.data.text();
+    if (event.data) {
+      data.body = event.data.text();
+    }
   }
 
   const options = {
-    body: payload.body,
-    icon: "/icon-192.png",
-    badge: "/icon-192.png",
-    vibrate: [300, 100, 300, 100, 300],
-    tag: payload.tag || "deloci-safety-alert",
-    renotify: true,
-    requireInteraction: true,
-    data: { url: payload.url || "/" },
+    body: data.body || data.message,
+    icon: '/icon-192.png',
+    badge: '/badge-72.png',
+    data: { url: data.url || '/' }
   };
 
   event.waitUntil(
-    self.registration.showNotification(payload.title || "Déloci Safety Alert", options)
+    self.registration.showNotification(data.title || 'Déloci Safety', options)
   );
 });
 
-// 5. NOTIFICATION CLICK: Focus existing tab or open target route
-self.addEventListener("notificationclick", (event) => {
+// Notification click event listener
+self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const relativeUrl = event.notification.data?.url || "/";
+  const targetUrl = event.notification.data?.url || '/';
 
   event.waitUntil(
-    clients.matchAll({ type: "window", includeUncontrolled: true }).then((windowClients) => {
-      const targetUrl = new URL(relativeUrl, self.location.origin).href;
-
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
       for (const client of windowClients) {
-        if (client.url === targetUrl && "focus" in client) {
+        if (client.url.includes(targetUrl) && 'focus' in client) {
           return client.focus();
         }
       }
-
-      if (windowClients.length > 0 && "focus" in windowClients[0]) {
-        const client = windowClients[0];
-        if ("navigate" in client) {
-          client.navigate(targetUrl);
-        }
-        return client.focus();
-      }
-
       if (clients.openWindow) {
         return clients.openWindow(targetUrl);
       }

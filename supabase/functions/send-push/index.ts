@@ -35,8 +35,8 @@ serve(async (req) => {
     const body = await req.json();
     let action = body.action;
 
-    // Normalize user ID inputs (supports single string or array of IDs via userIds / user_id)
-    const rawUserIds = body.userIds || body.user_id;
+    // Fixed: Added support for 'userId' (camelCase) alongside 'userIds' and 'user_id'
+    const rawUserIds = body.userIds || body.user_id || body.userId;
     const targetUserIds: string[] = Array.isArray(rawUserIds)
       ? rawUserIds
       : rawUserIds
@@ -50,11 +50,12 @@ serve(async (req) => {
 
     // 1. SUBSCRIBE ACTION
     if (action === "subscribe") {
-      const { user_id, endpoint, p256dh, auth, device_info } = body;
+      const { user_id, userId, endpoint, p256dh, auth, device_info } = body;
+      const subUserId = user_id || userId;
 
-      if (!user_id || !endpoint || !p256dh || !auth) {
+      if (!subUserId || !endpoint || !p256dh || !auth) {
         return new Response(
-          JSON.stringify({ error: "Missing required parameters: user_id, endpoint, p256dh, auth" }),
+          JSON.stringify({ error: "Missing required parameters: user_id/userId, endpoint, p256dh, auth" }),
           { status: 400, headers: corsHeaders }
         );
       }
@@ -62,7 +63,7 @@ serve(async (req) => {
       const { data, error } = await supabaseAdmin
         .from("user_push_subscriptions")
         .upsert(
-          { user_id, endpoint, p256dh, auth, device_info: device_info || null, is_active: true },
+          { user_id: subUserId, endpoint, p256dh, auth, device_info: device_info || null, is_active: true },
           { onConflict: "endpoint" }
         )
         .select();
@@ -90,9 +91,10 @@ serve(async (req) => {
       }
 
       if (targetUserIds.length === 0) {
+        // Return 200 with 0 delivered instead of 400 to prevent client-side FunctionsHttpError crashes
         return new Response(
-          JSON.stringify({ error: "Missing target user ID(s) in request body" }),
-          { status: 400, headers: corsHeaders }
+          JSON.stringify({ success: true, delivered: 0, message: "Missing target user ID(s) in request body" }),
+          { status: 200, headers: corsHeaders }
         );
       }
 
@@ -113,9 +115,10 @@ serve(async (req) => {
       }
 
       if (!subscriptions || subscriptions.length === 0) {
+        // Return 200 instead of 404 so client doesn't throw a FunctionsHttpError when a user has no subscriptions yet
         return new Response(
-          JSON.stringify({ error: "No active subscriptions found for target user(s)", delivered: 0 }),
-          { status: 404, headers: corsHeaders }
+          JSON.stringify({ success: true, delivered: 0, message: "No active subscriptions found for target user(s)" }),
+          { status: 200, headers: corsHeaders }
         );
       }
 
