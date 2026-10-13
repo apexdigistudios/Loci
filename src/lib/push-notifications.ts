@@ -1,6 +1,5 @@
 import { supabase } from "@/lib/supabase";
 
-// Helper to convert VAPID public key string to Uint8Array
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -14,44 +13,83 @@ function urlBase64ToUint8Array(base64String: string) {
 
 export async function subscribeUserToPush(userId: string) {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-    return { ok: false, reason: "Push notifications not supported by browser" };
+    return { ok: false, reason: "Push not supported" };
+  }
+
+  if (!userId) {
+    return { ok: false, reason: "Missing userId" };
+  }
+
+  if (!window.isSecureContext) {
+    return { ok: false, reason: "Insecure context (HTTP required)" };
   }
 
   try {
     const registration = await navigator.serviceWorker.ready;
     const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
 
-    if (!vapidPublicKey) {
-      console.warn("NEXT_PUBLIC_VAPID_PUBLIC_KEY is missing from environment variables.");
+    if (!vapidPublicKey || vapidPublicKey.trim() === "") {
+      console.warn("NEXT_PUBLIC_VAPID_PUBLIC_KEY is missing. Push subscriptions skipped.");
       return { ok: false, reason: "Missing VAPID public key" };
     }
 
-    const existingSubscription = await registration.pushManager.getSubscription();
-    const subscription = existingSubscription || (await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-    }));
+    const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey.trim());
+
+    if (applicationServerKey.length !== 65) {
+      console.warn("Invalid VAPID public key length (must be 65 bytes). Push subscriptions skipped.");
+      return { ok: false, reason: "Invalid VAPID public key length" };
+    }
+
+    if (Notification.permission === "default") {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        return { ok: false, reason: "Notification permission denied" };
+      }
+    }
+
+    let subscription = await registration.pushManager.getSubscription();
+    
+    // Safely attempt push subscription with graceful fallback for browser/local aborts
+    if (!subscription) {
+      try {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey,
+        });
+      } catch (pushErr: unknown) {
+        console.warn("Browser push service rejected subscription (running locally or service misconfigured):", (pushErr as Error).message);
+        return { ok: false, reason: "Browser push service unavailable" };
+      }
+    }
+
+    if (!subscription) {
+      return { ok: false, reason: "Failed to obtain push subscription" };
+    }
 
     const subJson = subscription.toJSON();
-    const { error } = await supabase.from("push_subscriptions").upsert(
+    if (!subJson.endpoint || !subJson.keys?.p256dh || !subJson.keys?.auth) {
+      return { ok: false, reason: "Invalid subscription keys" };
+    }
+
+    const { error } = await supabase.from("user_push_subscriptions").upsert(
       {
         user_id: userId,
         endpoint: subJson.endpoint,
-        p256dh: subJson.keys?.p256dh,
-        auth: subJson.keys?.auth,
+        p256dh: subJson.keys.p256dh,
+        auth: subJson.keys.auth,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "endpoint" }
     );
 
     if (error) {
-      console.error("Failed to save push subscription to Supabase:", error);
+      console.error("Supabase Push Subscription Upsert Error:", error);
       return { ok: false, reason: error.message };
     }
 
     return { ok: true, subscription };
   } catch (err: unknown) {
-    console.error("Push subscription failure:", err);
+    console.warn("Push subscription warning:", (err as Error).message);
     return { ok: false, reason: (err as Error).message };
   }
 }
@@ -59,7 +97,7 @@ export async function subscribeUserToPush(userId: string) {
 export async function sendPushTestNotification(userId: string) {
   try {
     const { data, error } = await supabase
-      .from("push_subscriptions")
+      .from("user_push_subscriptions")
       .select("id")
       .eq("user_id", userId);
 

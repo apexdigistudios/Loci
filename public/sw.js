@@ -3,14 +3,14 @@ const OFFLINE_URL = "/offline.html";
 
 // 1. INSTALLATION: Pre-cache offline page safely & skip waiting
 self.addEventListener("install", (event) => {
-  event.waitUntil(
+  event.waitUntil(Promise.all([
     caches.open(CACHE_NAME).then((cache) => {
       return cache.add(OFFLINE_URL).catch((err) => {
         console.warn("Offline page caching failed safely:", err);
       });
-    })
-  );
-  self.skipWaiting();
+    }),
+    self.skipWaiting(),
+  ]));
 });
 
 // 2. ACTIVATION: Clean up old caches & claim clients immediately
@@ -22,7 +22,7 @@ self.addEventListener("activate", (event) => {
           if (key !== CACHE_NAME) return caches.delete(key);
         })
       )
-    ).then(() => clients.claim())
+    ).then(() => self.clients.claim())
   );
 });
 
