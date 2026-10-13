@@ -16,6 +16,7 @@ import {
   Menu,
   X,
   ChevronDown,
+  UserCheck,
 } from "lucide-react";
 import { Hero } from "@/components/hero";
 import { LifestyleGallery } from "@/components/lifestyle-gallery";
@@ -25,6 +26,7 @@ import { Login, UserData } from "@/components/login";
 import { MainApp } from "@/components/main-app";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { SplashScreen } from "@/components/splash-screen";
+import { supabase } from "@/lib/supabase";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -95,10 +97,38 @@ export default function Home() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
 
+  // Referral Toast State
+  const [showReferralToast, setShowReferralToast] = useState(false);
+  const [toastReferrerName, setToastReferrerName] = useState<string>("");
+
   useEffect(() => {
     const savedPhone = localStorage.getItem("loci_user_phone");
     if (savedPhone) {
       setUserPhone(savedPhone);
+    }
+
+    // Check for ?signup=true and referral code
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const isSignup = params.get("signup") === "true";
+      const refCode = localStorage.getItem("loci_referral_code");
+
+      if (isSignup && refCode) {
+        setShowReferralToast(true);
+        // Fetch referrer name
+        supabase
+          .from("users")
+          .select("full_name, nickname")
+          .or(`phone.eq.${refCode},nickname.eq.${refCode}`)
+          .maybeSingle()
+          .then(({ data }) => {
+            if (data) {
+              setToastReferrerName(data.nickname || data.full_name || refCode);
+            } else {
+              setToastReferrerName(refCode);
+            }
+          });
+      }
     }
 
     const isNative = Capacitor.isNativePlatform();
@@ -169,11 +199,39 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between font-sans antialiased selection:bg-yellow-400 selection:text-black">
+    <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between font-sans antialiased selection:bg-yellow-400 selection:text-black relative">
       <InstallModal
         isOpen={isInstallModalOpen}
         onClose={() => setIsInstallModalOpen(false)}
       />
+
+      {/* Referral Toast Notification */}
+      {showReferralToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-100 w-[calc(100%-2rem)] max-w-md animate-bounce-short">
+          <div className="bg-zinc-900 text-white border border-yellow-400/40 rounded-3xl p-4 shadow-2xl backdrop-blur-xl flex items-center justify-between gap-3">
+            <div className="flex items-center space-x-3 min-w-0">
+              <div className="w-10 h-10 rounded-2xl bg-yellow-400 text-black flex items-center justify-center shrink-0 shadow-md">
+                <UserCheck className="w-5 h-5 font-bold" />
+              </div>
+              <div className="min-w-0 space-y-0.5">
+                <p className="text-xs font-black text-yellow-400 truncate">
+                  Referred by {toastReferrerName || "Friend"}! 🛡️
+                </p>
+                <p className="text-[11px] text-zinc-300 leading-tight">
+                  Install the app or sign in below to create your account. No app store needed!
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowReferralToast(false)}
+              className="p-2 text-zinc-400 hover:text-white rounded-full transition-colors shrink-0"
+              title="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       <header className="sticky top-0 z-50 border-b border-zinc-200 dark:border-zinc-800/80 bg-white/80 dark:bg-black/80 backdrop-blur-md">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between relative">

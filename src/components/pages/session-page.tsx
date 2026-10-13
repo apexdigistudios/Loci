@@ -130,7 +130,7 @@ export function SessionPage({
   const [manuallyPickedLocation, setManuallyPickedLocation] = useState(false);
   const manuallyPickedLocationRef = useRef(false);
 
-  /* Lag-free Auto-Suggestions State */
+  /* Auto-Suggestions State */
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   const [isFetchingSuggestions, setIsFetchingSuggestions] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -160,7 +160,6 @@ export function SessionPage({
     [contacts]
   );
 
-  /* Optimized Auto-Suggestions with AbortController and Local Country Bounding */
   useEffect(() => {
     if (!destination || destination.trim().length < 2 || !showSuggestions) {
       setSuggestions([]);
@@ -175,7 +174,6 @@ export function SessionPage({
           destination.trim()
         )}&limit=5`;
 
-        // Prioritize local country / GPS area bounding box if location is available, while allowing global matches
         if (locationCoords) {
           const minLon = locationCoords.longitude - 3;
           const maxLat = locationCoords.latitude + 3;
@@ -542,18 +540,15 @@ export function SessionPage({
     }
   };
 
-  const handleFormKeyDown = (e: React.KeyboardEvent<HTMLFormElement>) => {
-    if (e.key === "Enter") {
-      if (currentStep < 4) {
-        e.preventDefault();
-        handleNextStep();
-      }
-    }
-  };
-
-  const handleWizardSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const executeStartSession = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (currentStep !== 4 || sessionLoading) return;
+    if (sessionLoading) return;
+
+    if (!destination.trim()) {
+      alert("Please specify your destination in Step 1.");
+      setCurrentStep(1);
+      return;
+    }
 
     try {
       if (userId) {
@@ -583,7 +578,6 @@ export function SessionPage({
     }
   };
 
-  /* Sets destination text without touching the departure pin */
   const selectSuggestion = (item: SuggestionItem) => {
     setDestination(item.display_name);
     setShowSuggestions(false);
@@ -686,7 +680,6 @@ export function SessionPage({
               </div>
             </div>
 
-            {/* Theme-Adaptive Timer Card */}
             <div className="rounded-3xl bg-zinc-100/80 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800/80 p-6 backdrop-blur-xl shadow-sm flex items-center justify-center">
               <span className="font-mono font-black text-6xl sm:text-7xl tracking-tighter scale-y-[1.3] text-yellow-500 dark:text-yellow-400 select-none drop-shadow-[0_4px_16px_rgba(250,204,21,0.25)]">
                 {formatTime(remainingSeconds)}
@@ -781,7 +774,7 @@ export function SessionPage({
           </div>
         </div>
       ) : (
-        /* 4-STEP WIZARD PAGEVIEW */
+        /* WIZARD PAGEVIEW */
         <div className="pt-[max(0.5rem,env(safe-area-inset-top))] space-y-4 max-w-md mx-auto min-h-[82vh] flex flex-col justify-between">
           <input
             ref={galleryInputRef}
@@ -814,7 +807,6 @@ export function SessionPage({
               <div className="w-9" />
             </div>
 
-            {/* Segmented 4-Step Bar */}
             <div className="space-y-1.5 px-1">
               <div className="flex items-center justify-between text-[11px] font-black uppercase tracking-wider text-zinc-400">
                 <span>
@@ -838,11 +830,7 @@ export function SessionPage({
             </div>
           </div>
 
-          <form
-            onSubmit={handleWizardSubmit}
-            onKeyDown={handleFormKeyDown}
-            className="flex-1 flex flex-col justify-between"
-          >
+          <div className="flex-1 flex flex-col justify-between">
             {/* Sliding Container */}
             <div className="overflow-hidden relative flex-1 py-2">
               <div
@@ -869,7 +857,6 @@ export function SessionPage({
                       <MapPin className="w-4 h-4 absolute left-4 text-zinc-400 z-10" />
                       <input
                         type="text"
-                        required={currentStep === 1}
                         placeholder="e.g. Osu Oxford Street or Home"
                         value={destination}
                         onChange={(e) => {
@@ -884,7 +871,6 @@ export function SessionPage({
                       )}
                     </div>
 
-                    {/* Auto-suggestions Dropdown */}
                     {showSuggestions && suggestions.length > 0 && (
                       <div className="absolute top-full left-0 right-0 mt-1 z-30 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl border border-zinc-300/60 dark:border-zinc-800 rounded-2xl shadow-2xl max-h-52 overflow-y-auto divide-y divide-zinc-200/60 dark:divide-zinc-800/60">
                         {suggestions.map((item) => (
@@ -975,7 +961,6 @@ export function SessionPage({
                       <Clock className="w-4 h-4 absolute left-4 text-zinc-400" />
                       <input
                         type="time"
-                        required={currentStep === 2}
                         value={returnTimeStr}
                         onChange={(e) => setReturnTimeStr(e.target.value)}
                         className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl pl-11 pr-5 py-4 text-xs font-extrabold text-black dark:text-white focus:outline-none focus:border-yellow-400 transition-all shadow-inner"
@@ -1019,7 +1004,6 @@ export function SessionPage({
                         type="number"
                         min="1"
                         max="1440"
-                        required={currentStep === 3}
                         value={userReminderMins}
                         onChange={(event) => setUserReminderMins(event.target.value ? Number(event.target.value) : "")}
                         className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl px-4 py-3.5 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400"
@@ -1035,7 +1019,6 @@ export function SessionPage({
                         type="number"
                         min="1"
                         max="1440"
-                        required={currentStep === 3}
                         value={contactReminderMins}
                         onChange={(event) => setContactReminderMins(event.target.value ? Number(event.target.value) : "")}
                         className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl px-4 py-3.5 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400"
@@ -1235,7 +1218,8 @@ export function SessionPage({
                 </button>
               ) : (
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={(e) => void executeStartSession(e)}
                   disabled={sessionLoading}
                   className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-4 rounded-full text-xs transition-all flex items-center justify-center space-x-2 active:scale-95 disabled:opacity-40 shadow-lg shadow-yellow-400/20"
                 >
@@ -1250,7 +1234,7 @@ export function SessionPage({
                 </button>
               )}
             </div>
-          </form>
+          </div>
         </div>
       )}
     </>
