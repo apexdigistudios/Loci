@@ -1,10 +1,14 @@
 const CACHE_NAME = "deloci-cache-v1";
 const OFFLINE_URL = "/offline.html";
 
-// 1. INSTALLATION: Pre-cache offline page & skip waiting
+// 1. INSTALLATION: Pre-cache offline page safely & skip waiting
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.add(OFFLINE_URL))
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.add(OFFLINE_URL).catch((err) => {
+        console.warn("Offline page caching failed safely:", err);
+      });
+    })
   );
   self.skipWaiting();
 });
