@@ -25,6 +25,7 @@ interface DeviceContactPicker {
 
 export interface Contact {
   id: string;
+  contact_user_id?: string;
   name: string;
   phone: string;
   group_category?: string;

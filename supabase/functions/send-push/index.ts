@@ -10,10 +10,15 @@ const corsHeaders = {
 };
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function normalizePhone(value: string) {
   const digits = value.trim().replace(/\D/g, "");
   return digits ? `+${digits}` : "";
+}
+
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
 }
 
 serve(async (req) => {
@@ -50,10 +55,13 @@ serve(async (req) => {
       .map((id) => id.trim())
       .filter(Boolean);
     const targetUserUuids = targetUserIds.filter((id) => UUID_PATTERN.test(id));
+    const emailAliases = Array.from(new Set(targetUserIds
+      .filter((id) => !UUID_PATTERN.test(id) && EMAIL_PATTERN.test(id))
+      .map(normalizeEmail)));
     const phoneAliases = Array.from(new Set(targetUserIds
-      .filter((id) => !UUID_PATTERN.test(id))
+      .filter((id) => !UUID_PATTERN.test(id) && !EMAIL_PATTERN.test(id))
       .flatMap((phone) => [phone.trim(), normalizePhone(phone)])
-      .filter(Boolean)));
+      .filter((phone) => /^\+?\d[\d\s().-]{6,18}$/.test(phone))));
 
     // Default action to "send" if target users are passed without explicit action
     if (!action && targetUserIds.length > 0) {
@@ -72,9 +80,12 @@ serve(async (req) => {
         );
       }
 
-      const userLookup = UUID_PATTERN.test(String(subUserId))
-        ? await supabaseAdmin.from("users").select("id, phone").eq("id", subUserId).maybeSingle()
-        : await supabaseAdmin.from("users").select("id, phone").eq("phone", normalizePhone(String(subUserId))).maybeSingle();
+      const normalizedSubUserId = String(subUserId);
+      const userLookup = UUID_PATTERN.test(normalizedSubUserId)
+        ? await supabaseAdmin.from("users").select("id, phone").eq("id", normalizedSubUserId).maybeSingle()
+        : EMAIL_PATTERN.test(normalizedSubUserId)
+        ? await supabaseAdmin.from("users").select("id, phone").eq("email", normalizeEmail(normalizedSubUserId)).maybeSingle()
+        : await supabaseAdmin.from("users").select("id, phone").eq("phone", normalizePhone(normalizedSubUserId)).maybeSingle();
 
       if (userLookup.error || !userLookup.data) {
         return new Response(
@@ -134,19 +145,31 @@ serve(async (req) => {
       let resolvedUserUuids = targetUserUuids;
       let searchPhones = phoneAliases;
 
+      const userQueries = [];
       if (phoneAliases.length > 0) {
-        const { data: matchingUsers, error: usersError } = await supabaseAdmin
+        userQueries.push(supabaseAdmin
           .from("users")
           .select("id, phone")
-          .in("phone", phoneAliases);
+          .in("phone", phoneAliases));
+      }
+      if (emailAliases.length > 0) {
+        userQueries.push(supabaseAdmin
+          .from("users")
+          .select("id, phone")
+          .in("email", emailAliases));
+      }
 
-        if (usersError) {
-          return new Response(
-            JSON.stringify({ error: usersError.message }),
-            { status: 500, headers: corsHeaders }
-          );
-        }
+      const userResults = await Promise.all(userQueries);
+      const userError = userResults.find((result) => result.error)?.error;
+      if (userError) {
+        return new Response(
+          JSON.stringify({ error: userError.message }),
+          { status: 500, headers: corsHeaders }
+        );
+      }
 
+      if (userResults.length > 0) {
+        const matchingUsers = userResults.flatMap((result) => result.data || []);
         resolvedUserUuids = Array.from(new Set([
           ...resolvedUserUuids,
           ...(matchingUsers || []).map((user) => user.id),

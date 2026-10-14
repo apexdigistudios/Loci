@@ -87,7 +87,11 @@ self.addEventListener('push', (event) => {
   };
 
   event.waitUntil(
-    self.registration.showNotification(data.title || 'Déloci Safety Alert', options)
+    Promise.resolve()
+      .then(() => self.registration.showNotification(data.title || 'Déloci Safety Alert', options))
+      .catch((error) => {
+        console.error('[ServiceWorker] Could not display push notification:', error);
+      })
   );
 });
 

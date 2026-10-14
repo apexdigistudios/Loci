@@ -8,12 +8,7 @@ import { cleanPhone } from "@/lib/utils";
 import { requestNotificationPermission, type NotificationPermissionResult } from "@/lib/notifications";
 import { sendPushTestNotification, subscribeUserToPush } from "@/lib/push-notifications";
 import { prepareAlertFeedback } from "@/lib/alerts";
-import {
-  onSessionStarted,
-  onSenderCheckedIn,
-  onSessionEnded,
-  onSessionOverdue,
-} from "@/lib/session-notifications";
+import { onSessionOverdue } from "@/lib/session-notifications";
 
 import { HomePage } from "@/components/pages/home-page";
 import { SessionPage } from "@/components/pages/session-page";
@@ -218,21 +213,28 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         .order("created_at", { ascending: false });
 
       if (contactsData && contactsData.length > 0) {
-        const phoneNumbers = contactsData.map((c) => c.phone);
+        const phoneNumbers = Array.from(new Set(contactsData.flatMap((contact) => [
+          contact.phone,
+          cleanPhone(contact.phone),
+        ]).filter(Boolean)));
         const { data: matchedUsers } = await supabase
           .from("users")
-          .select("phone, avatar_url")
+          .select("id, phone, avatar_url")
           .in("phone", phoneNumbers);
 
-        const userAvatarMap = new Map(
-          (matchedUsers || []).map((u) => [u.phone, u.avatar_url])
+        const matchedUserMap = new Map(
+          (matchedUsers || []).map((user) => [cleanPhone(user.phone), user])
         );
 
-        const formattedContacts: Contact[] = contactsData.map((c) => ({
-          ...c,
-          isLociUser: userAvatarMap.has(c.phone),
-          avatar_url: userAvatarMap.get(c.phone) || undefined,
-        }));
+        const formattedContacts: Contact[] = contactsData.map((contact) => {
+          const matchedUser = matchedUserMap.get(cleanPhone(contact.phone));
+          return {
+            ...contact,
+            contact_user_id: matchedUser?.id,
+            isLociUser: !!matchedUser,
+            avatar_url: matchedUser?.avatar_url || undefined,
+          };
+        });
 
         setContacts(formattedContacts);
         setSelectedContactIds(formattedContacts.map((c) => c.id));
@@ -438,8 +440,17 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     };
 
     checkOverdueAlert();
+    const checkWhenVisible = () => {
+      if (document.visibilityState === "visible") checkOverdueAlert();
+    };
     const overdueInterval = setInterval(checkOverdueAlert, 10000);
-    return () => clearInterval(overdueInterval);
+    document.addEventListener("visibilitychange", checkWhenVisible);
+    window.addEventListener("focus", checkOverdueAlert);
+    return () => {
+      clearInterval(overdueInterval);
+      document.removeEventListener("visibilitychange", checkWhenVisible);
+      window.removeEventListener("focus", checkOverdueAlert);
+    };
   }, [activeSession, contacts, fullName, nickname]);
 
   const toggleContactSelection = (id: string) => {
@@ -478,12 +489,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     setSessionLoading(true);
 
     const selectedContacts = contacts.filter((contact) => selectedContactIds.includes(contact.id));
-    const targetPhones = selectedContacts.length > 0
-      ? selectedContacts.map((c) => c.phone)
-      : contacts.map((c) => c.phone);
-
-    const senderDisplayName = nickname || fullName || "Your friend";
-    void onSessionStarted(senderDisplayName, destName, targetPhones);
 
     try {
       const { data: notification, error: notifError } = await supabase
@@ -573,9 +578,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       localStorage.setItem("loci_active_session", JSON.stringify(updatedSession));
     }
 
-    const senderDisplayName = nickname || fullName || "Your friend";
-    const targetPhones = contacts.map((c) => c.phone);
-    void onSenderCheckedIn(senderDisplayName, targetPhones);
   };
 
   const handleCompleteSession = async () => {
@@ -584,10 +586,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     if (typeof window !== "undefined") {
       localStorage.removeItem("loci_active_session");
     }
-
-    const senderDisplayName = nickname || fullName || "Your friend";
-    const targetPhones = contacts.map((c) => c.phone);
-    void onSessionEnded(senderDisplayName, targetPhones);
 
     if (currentId && !currentId.startsWith("local-")) {
       setSessionLoading(true);
