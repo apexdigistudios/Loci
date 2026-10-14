@@ -59,6 +59,24 @@ export async function sendPushAlert(
   message: string,
   url: string = "/"
 ) {
+  if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+    try {
+      if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+        void navigator.serviceWorker.ready
+          .then((registration) => registration.showNotification(title, {
+            body: message,
+            icon: "/icon-192x192.png",
+            tag: "deloci-local-alert",
+          }))
+          .catch((error) => console.warn("Could not show local alert notification:", error));
+      } else {
+        new Notification(title, { body: message, icon: "/icon-192x192.png" });
+      }
+    } catch (error) {
+      console.warn("Could not show local alert notification:", error);
+    }
+  }
+
   if (!userIds) return;
   const targetIds = Array.isArray(userIds) ? userIds.filter(Boolean) : [userIds];
   if (targetIds.length === 0) return;

@@ -9,6 +9,13 @@ const corsHeaders = {
   "Content-Type": "application/json",
 };
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function normalizePhone(value: string) {
+  const digits = value.trim().replace(/\D/g, "");
+  return digits ? `+${digits}` : "";
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -37,11 +44,16 @@ serve(async (req) => {
 
     // Fixed: Added support for 'userId' (camelCase) alongside 'userIds' and 'user_id'
     const rawUserIds = body.userIds || body.user_id || body.userId;
-    const targetUserIds: string[] = Array.isArray(rawUserIds)
-      ? rawUserIds
-      : rawUserIds
-      ? [rawUserIds]
-      : [];
+    const targetUserIds: string[] = (Array.isArray(rawUserIds) ? rawUserIds : rawUserIds ? [rawUserIds] : [])
+      .filter((id) => typeof id === "string" || typeof id === "number")
+      .map(String)
+      .map((id) => id.trim())
+      .filter(Boolean);
+    const targetUserUuids = targetUserIds.filter((id) => UUID_PATTERN.test(id));
+    const phoneAliases = Array.from(new Set(targetUserIds
+      .filter((id) => !UUID_PATTERN.test(id))
+      .flatMap((phone) => [phone.trim(), normalizePhone(phone)])
+      .filter(Boolean)));
 
     // Default action to "send" if target users are passed without explicit action
     if (!action && targetUserIds.length > 0) {
@@ -60,10 +72,29 @@ serve(async (req) => {
         );
       }
 
+      const userLookup = UUID_PATTERN.test(String(subUserId))
+        ? await supabaseAdmin.from("users").select("id, phone").eq("id", subUserId).maybeSingle()
+        : await supabaseAdmin.from("users").select("id, phone").eq("phone", normalizePhone(String(subUserId))).maybeSingle();
+
+      if (userLookup.error || !userLookup.data) {
+        return new Response(
+          JSON.stringify({ error: userLookup.error?.message || "Could not resolve subscription user" }),
+          { status: userLookup.error ? 500 : 404, headers: corsHeaders }
+        );
+      }
+
       const { data, error } = await supabaseAdmin
         .from("user_push_subscriptions")
         .upsert(
-          { user_id: subUserId, endpoint, p256dh, auth, device_info: device_info || null, is_active: true },
+          {
+            user_id: userLookup.data.id,
+            user_phone: normalizePhone(userLookup.data.phone),
+            endpoint,
+            p256dh,
+            auth,
+            device_info: device_info || null,
+            is_active: true,
+          },
           { onConflict: "endpoint" }
         )
         .select();
@@ -100,19 +131,56 @@ serve(async (req) => {
 
       webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
 
-      // Query active push subscriptions across all target user IDs
-      const { data: subscriptions, error } = await supabaseAdmin
-        .from("user_push_subscriptions")
-        .select("*")
-        .in("user_id", targetUserIds)
-        .eq("is_active", true);
+      let resolvedUserUuids = targetUserUuids;
+      let searchPhones = phoneAliases;
 
-      if (error) {
+      if (phoneAliases.length > 0) {
+        const { data: matchingUsers, error: usersError } = await supabaseAdmin
+          .from("users")
+          .select("id, phone")
+          .in("phone", phoneAliases);
+
+        if (usersError) {
+          return new Response(
+            JSON.stringify({ error: usersError.message }),
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        resolvedUserUuids = Array.from(new Set([
+          ...resolvedUserUuids,
+          ...(matchingUsers || []).map((user) => user.id),
+        ]));
+        searchPhones = Array.from(new Set([
+          ...searchPhones,
+          ...(matchingUsers || []).map((user) => normalizePhone(user.phone)),
+        ].filter(Boolean)));
+      }
+
+      const subscriptionQueries = [];
+      if (resolvedUserUuids.length > 0) {
+        subscriptionQueries.push(
+          supabaseAdmin.from("user_push_subscriptions").select("*").in("user_id", resolvedUserUuids).eq("is_active", true)
+        );
+      }
+      if (searchPhones.length > 0) {
+        subscriptionQueries.push(
+          supabaseAdmin.from("user_push_subscriptions").select("*").in("user_phone", searchPhones).eq("is_active", true)
+        );
+      }
+
+      const queryResults = await Promise.all(subscriptionQueries);
+      const errorResult = queryResults.find((result) => result.error);
+      if (errorResult?.error) {
         return new Response(
-          JSON.stringify({ error: error.message }),
+          JSON.stringify({ error: errorResult.error.message }),
           { status: 500, headers: corsHeaders }
         );
       }
+
+      const subscriptions = Array.from(new Map(
+        queryResults.flatMap((result) => result.data || []).map((subscription) => [subscription.endpoint, subscription])
+      ).values());
 
       if (!subscriptions || subscriptions.length === 0) {
         // Return 200 instead of 404 so client doesn't throw a FunctionsHttpError when a user has no subscriptions yet

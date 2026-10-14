@@ -42,40 +42,52 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(event.request)
       .catch(() => {
-        return caches.match(event.request).then((cachedResponse) => {
-          if (cachedResponse) {
-            return cachedResponse;
+        return (async () => {
+          try {
+            const cachedResponse = await caches.match(event.request);
+            if (cachedResponse) return cachedResponse;
+
+            if (event.request.mode === 'navigate') {
+              const cachedHome = await caches.match('/');
+              if (cachedHome) return cachedHome;
+            }
+          } catch (error) {
+            console.warn('[ServiceWorker] Cache fallback failed:', error);
           }
-          if (event.request.mode === 'navigate') {
-            return caches.match('/');
-          }
-        });
+
+          return new Response('Offline', {
+            status: 503,
+            statusText: 'Service Unavailable',
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          });
+        })();
       })
   );
 });
 
 // Push notification event listener
 self.addEventListener('push', (event) => {
-  let data = { title: 'Déloci Alert', body: 'You have a new notification.', url: '/' };
+  let data = { title: 'Déloci Safety Alert', body: 'Safety update received.' };
   try {
     if (event.data) {
-      data = event.data.json();
+      const payload = event.data.json();
+      if (payload && typeof payload === 'object') data = payload;
     }
-  } catch (e) {
-    if (event.data) {
-      data.body = event.data.text();
-    }
+  } catch (error) {
+    console.warn('[ServiceWorker] Could not parse push payload:', error);
   }
 
   const options = {
-    body: data.body || data.message,
-    icon: '/icon-192.png',
-    badge: '/badge-72.png',
-    data: { url: data.url || '/' }
+    body: data.body || data.message || 'Safety update received.',
+    icon: '/icon-192x192.png',
+    badge: '/badge-72x72.png',
+    vibrate: [200, 100, 200],
+    data: { url: data.url || '/' },
+    tag: data.tag || 'deloci-alert'
   };
 
   event.waitUntil(
-    self.registration.showNotification(data.title || 'Déloci Safety', options)
+    self.registration.showNotification(data.title || 'Déloci Safety Alert', options)
   );
 });
 
