@@ -67,7 +67,7 @@ interface SessionPageProps {
   selectedContactIds: string[];
   toggleContactSelection: (id: string) => void;
   sessionLoading: boolean;
-  handleStartSession: (e: React.FormEvent, coordinates?: SessionCoordinates) => void;
+  handleStartSession: (e: React.FormEvent, coordinates?: SessionCoordinates) => void | Promise<boolean>;
   handleCompleteSession: () => void | Promise<boolean>;
   handleSafeCheckin: () => void | Promise<boolean>;
   onNavigate: (tab: "home" | "session" | "contacts" | "share" | "profile") => void;
@@ -104,6 +104,7 @@ export function SessionPage({
 }: SessionPageProps) {
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [isCheckingIn, setIsCheckingIn] = useState<boolean>(false);
+  const [actionMessage, setActionMessage] = useState("");
 
   const [attachedMedia, setAttachedMedia] = useState<{
     file: File;
@@ -456,10 +457,14 @@ export function SessionPage({
   const handleCheckInClick = async () => {
     if (isCheckingIn) return;
     setIsCheckingIn(true);
+    setActionMessage("");
     try {
       lastCheckinPushRef.current = 0;
       const checkinSaved = await Promise.resolve(handleSafeCheckin());
-      if (checkinSaved === false) return;
+      if (checkinSaved === false) {
+        setActionMessage("We couldn’t save your check-in. Check your connection and try again. Your session is still active.");
+        return;
+      }
 
       void dispatchAlert({
         userIds: userId || "",
@@ -481,14 +486,27 @@ export function SessionPage({
           showLocal: false,
         });
       }
+    } catch (error) {
+      console.error("Check-in action failed:", error);
+      setActionMessage("We couldn’t save your check-in just now. Please try again. Your session is still active.");
     } finally {
       setTimeout(() => setIsCheckingIn(false), 800);
     }
   };
 
   const onEndSessionClick = async () => {
-    const sessionEnded = await Promise.resolve(handleCompleteSession());
-    if (sessionEnded === false) return;
+    setActionMessage("");
+    try {
+      const sessionEnded = await Promise.resolve(handleCompleteSession());
+      if (sessionEnded === false) {
+        setActionMessage("We couldn’t end your session just now. Check your connection and try again.");
+        return;
+      }
+    } catch (error) {
+      console.error("Session end action failed:", error);
+      setActionMessage("We couldn’t end your session just now. Please try again.");
+      return;
+    }
 
     void dispatchAlert({
       userIds: userId || "",
@@ -618,10 +636,11 @@ export function SessionPage({
     if (e) e.preventDefault();
 
     if (currentStep === 1 && !destination.trim()) {
-      alert("Please enter a destination before proceeding.");
+      setActionMessage("Add a destination to continue.");
       return;
     }
 
+    setActionMessage("");
     if (currentStep < 4) {
       setCurrentStep((s) => s + 1);
     }
@@ -632,21 +651,29 @@ export function SessionPage({
     if (sessionLoading) return;
 
     if (!destination.trim()) {
-      alert("Please specify your destination in Step 1.");
+      setActionMessage("Add a destination in the first step to start your session.");
       setCurrentStep(1);
       return;
     }
 
+    setActionMessage("");
+    let notificationMessage = "";
     try {
       if (userId) {
         const result = await subscribeUserToPush(userId);
-        if (!result.ok) console.warn("Push alerts may not reach this device:", result.reason);
+        if (!result.ok) notificationMessage = result.reason || "Notifications couldn’t be enabled. You can turn them on later in Settings.";
       }
     } catch (error) {
       console.error("Push permission or subscription failed:", error);
+      notificationMessage = "We couldn’t enable notifications right now. You can turn them on later in Settings.";
     }
 
-    handleStartSession(event, locationCoords || undefined);
+    const started = await Promise.resolve(handleStartSession(event, locationCoords || undefined));
+    if (started === false) {
+      setActionMessage("Your session is running on this device, but it couldn’t sync with your contacts. Check your connection before relying on contact alerts.");
+    } else if (notificationMessage) {
+      setActionMessage(`${notificationMessage} Your session can still continue.`);
+    }
   };
 
   const selectSuggestion = (item: SuggestionItem) => {
@@ -657,6 +684,12 @@ export function SessionPage({
 
   return (
     <>
+      {actionMessage && (
+        <div role="alert" className="mx-auto mb-3 flex max-w-md items-start justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+          <span>{actionMessage}</span>
+          <button type="button" onClick={() => setActionMessage("")} className="shrink-0 font-bold underline underline-offset-2">Dismiss</button>
+        </div>
+      )}
       {/* CAMERA OVERLAY */}
       {isCameraActive && (
         <div className="fixed inset-0 z-100 bg-black flex flex-col justify-between p-4 max-w-md mx-auto">

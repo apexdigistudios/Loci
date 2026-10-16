@@ -18,6 +18,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { invokeNotificationApi } from "@/lib/notification-session";
+import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 
 type NotificationType = "session_start" | "checkin" | "emergency" | "session_end" | "update" | "guardian_alert";
 
@@ -73,7 +74,7 @@ export function NotificationsPage({ userId, onBack }: NotificationsPageProps) {
       setNotifications(result.notifications || []);
       setErrorMessage("");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Could not load notifications.");
+      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t load your activity just now. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -119,7 +120,7 @@ export function NotificationsPage({ userId, onBack }: NotificationsPageProps) {
       setNotifications((current) => current.map((notification) =>
         notification.id === item.id ? { ...notification, is_read: item.is_read } : notification
       ));
-      setErrorMessage(error instanceof Error ? error.message : "Could not update notification.");
+      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t update that item. Please try again."));
     } finally {
       setBusyId(null);
     }
@@ -133,7 +134,7 @@ export function NotificationsPage({ userId, onBack }: NotificationsPageProps) {
       await invokeNotificationApi({ action: "delete", id });
     } catch (error) {
       setNotifications(previous);
-      setErrorMessage(error instanceof Error ? error.message : "Could not delete notification.");
+      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t remove that item. Please try again."));
     } finally {
       setBusyId(null);
     }
@@ -148,7 +149,7 @@ export function NotificationsPage({ userId, onBack }: NotificationsPageProps) {
       await invokeNotificationApi({ action: "clear" });
     } catch (error) {
       setNotifications(previous);
-      setErrorMessage(error instanceof Error ? error.message : "Could not clear notifications.");
+      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t clear your activity. Please try again."));
     } finally {
       setClearingAll(false);
     }
@@ -186,9 +187,10 @@ export function NotificationsPage({ userId, onBack }: NotificationsPageProps) {
       </header>
 
       {errorMessage && (
-        <p role="alert" className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
-          {errorMessage}
-        </p>
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+          <span>{errorMessage}</span>
+          <button type="button" onClick={() => void fetchNotifications()} className="font-bold underline underline-offset-2">Try again</button>
+        </div>
       )}
 
       {loading ? (

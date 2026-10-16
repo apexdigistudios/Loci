@@ -1,4 +1,5 @@
 import { invokeNotificationApi } from "@/lib/notification-session";
+import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -13,15 +14,15 @@ function urlBase64ToUint8Array(base64String: string) {
 
 export async function subscribeUserToPush(userId: string) {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-    return { ok: false, reason: "Push not supported" };
+    return { ok: false, reason: "Notifications aren’t available in this browser. You can still use Déloci as usual." };
   }
 
   if (!userId) {
-    return { ok: false, reason: "Missing userId" };
+    return { ok: false, reason: "Your profile is still loading. Please try again in a moment." };
   }
 
   if (!window.isSecureContext) {
-    return { ok: false, reason: "Insecure context (HTTP required)" };
+    return { ok: false, reason: "Notifications need a secure connection. Open Déloci from its usual app or website address." };
   }
 
   try {
@@ -30,20 +31,20 @@ export async function subscribeUserToPush(userId: string) {
 
     if (!vapidPublicKey || vapidPublicKey.trim() === "") {
       console.warn("NEXT_PUBLIC_VAPID_PUBLIC_KEY is missing. Push subscriptions skipped.");
-      return { ok: false, reason: "Missing VAPID public key" };
+      return { ok: false, reason: "Push notifications aren’t configured on this app yet. You can still use Déloci normally." };
     }
 
     const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey.trim());
 
     if (applicationServerKey.length !== 65) {
       console.warn("Invalid VAPID public key length (must be 65 bytes). Push subscriptions skipped.");
-      return { ok: false, reason: "Invalid VAPID public key length" };
+      return { ok: false, reason: "We couldn’t set up notifications on this device. Please try again later." };
     }
 
     if (Notification.permission === "default") {
       const permission = await Notification.requestPermission();
       if (permission !== "granted") {
-        return { ok: false, reason: "Notification permission denied" };
+        return { ok: false, reason: "Notifications are turned off. You can enable them in your device settings." };
       }
     }
 
@@ -57,18 +58,18 @@ export async function subscribeUserToPush(userId: string) {
           applicationServerKey,
         });
       } catch (pushErr: unknown) {
-        console.warn("Browser push service rejected subscription (running locally or service misconfigured):", (pushErr as Error).message);
-        return { ok: false, reason: "Browser push service unavailable" };
+        console.warn("Browser push subscription was unavailable:", pushErr);
+        return { ok: false, reason: "Your browser couldn’t enable notifications right now. Please try again later." };
       }
     }
 
     if (!subscription) {
-      return { ok: false, reason: "Failed to obtain push subscription" };
+      return { ok: false, reason: "We couldn’t enable notifications on this device. Please try again." };
     }
 
     const subJson = subscription.toJSON();
     if (!subJson.endpoint || !subJson.keys?.p256dh || !subJson.keys?.auth) {
-      return { ok: false, reason: "Invalid subscription keys" };
+      return { ok: false, reason: "We couldn’t enable notifications on this device. Please try again." };
     }
 
     await invokeNotificationApi({
@@ -85,14 +86,14 @@ export async function subscribeUserToPush(userId: string) {
 
     return { ok: true, subscription };
   } catch (err: unknown) {
-    console.warn("Push subscription warning:", (err as Error).message);
-    return { ok: false, reason: (err as Error).message };
+    console.warn("Push subscription warning:", err);
+    return { ok: false, reason: getFriendlyErrorMessage(err, "We couldn’t enable notifications right now. You can try again from Settings.") };
   }
 }
 
 export async function sendPushTestNotification(userId: string) {
   try {
-    if (!userId) return { ok: false, reason: "Missing user identity" };
+    if (!userId) return { ok: false, reason: "Your profile is still loading. Please try again in a moment." };
     const result = await invokeNotificationApi<{ delivered: number }>({
       action: "test",
       userId,
@@ -101,9 +102,9 @@ export async function sendPushTestNotification(userId: string) {
       type: "update",
       url: "/main?tab=profile",
     });
-    if (result.delivered === 0) return { ok: false, reason: "No active push subscriptions found for user." };
+    if (result.delivered === 0) return { ok: false, reason: "This device doesn’t have notifications enabled yet. Turn them on in Settings and try again." };
     return { ok: true, data: { delivered: result.delivered } };
   } catch (err: unknown) {
-    return { ok: false, reason: (err as Error).message };
+    return { ok: false, reason: getFriendlyErrorMessage(err, "We couldn’t send a test notification just now. Please try again.") };
   }
 }

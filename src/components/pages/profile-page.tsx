@@ -373,15 +373,15 @@ export function ProfilePage({
             {notificationPermission === "granted" ? (
               <span className="inline-flex items-center space-x-1 text-[10px] font-black bg-emerald-500/10 text-emerald-500 px-2.5 py-1 rounded-full">
                 <CheckCircle className="w-3 h-3" />
-                <span>ALLOWED</span>
+                <span>On</span>
               </span>
             ) : notificationPermission === "denied" ? (
               <div className="text-right">
                 <span className="inline-flex items-center space-x-1 text-[10px] font-black bg-red-500/10 text-red-500 px-2.5 py-1 rounded-full mb-1">
                   <AlertCircle className="w-3 h-3" />
-                  <span>DENIED</span>
+                  <span>Off</span>
                 </span>
-                <p className="text-[9px] text-zinc-400">Reset in browser settings</p>
+                <p className="max-w-36 text-[10px] leading-snug text-zinc-500">Turn notifications on in your browser or device settings to receive safety updates.</p>
               </div>
             ) : (
               <button

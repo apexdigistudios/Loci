@@ -1,5 +1,6 @@
 import { normalizePhone } from "@/lib/utils";
 import { invokeNotificationApi } from "@/lib/notification-session";
+import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 
 export type AlertType = "session_start" | "checkin" | "emergency" | "session_end" | "update" | "guardian_alert";
 
@@ -151,7 +152,7 @@ export async function dispatchAlert(request: AlertRequest): Promise<AlertDispatc
     delivered: push?.delivered || 0,
     notificationCount: push?.notificationCount || 0,
     error: pushResult.status === "rejected"
-      ? (pushResult.reason instanceof Error ? pushResult.reason.message : "Push delivery failed")
+      ? getFriendlyErrorMessage(pushResult.reason, "We couldn’t send that update just now. Please try again.")
       : undefined,
   };
 }

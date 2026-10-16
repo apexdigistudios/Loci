@@ -5,6 +5,7 @@ import { User, UserCheck, Phone, Lock, ArrowRight, Loader2, LogIn, ImagePlus, Ke
 import { supabase } from "@/lib/supabase";
 import { normalizePhone, isValidPhone } from "@/lib/utils";
 import { createNotificationSession, getNotificationPinStatus } from "@/lib/notification-session";
+import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 import { SplashScreen } from "@/components/splash-screen";
 
 export interface UserData {
@@ -87,6 +88,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
   const [detectedCountry, setDetectedCountry] = useState<CountryInfo>(COUNTRIES[0]);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [accountNotFound, setAccountNotFound] = useState(false);
   const [profileCheckComplete, setProfileCheckComplete] = useState(() => {
     if (typeof window === "undefined") return true;
 
@@ -167,7 +169,8 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
           localStorage.removeItem("loci_user_profile");
           localStorage.removeItem("loci_saved_phone");
           setPhone(phoneToVerify);
-          setIsSignUp(true);
+          setAccountNotFound(true);
+          setErrorMessage("We couldn't find an account matching this number. Would you like to create a new account?");
         }
         setProfileCheckComplete(true);
       }, () => {
@@ -200,6 +203,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
 
   const resetFormState = () => {
     setErrorMessage(null);
+    setAccountNotFound(false);
     setFullName("");
     setNickname("");
     setPin("");
@@ -215,6 +219,8 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setPhone(val);
+    setErrorMessage(null);
+    setAccountNotFound(false);
 
     const cleanVal = val.trim();
     if (!cleanVal) return;
@@ -243,10 +249,11 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     if (loading) return;
 
     setErrorMessage(null);
+    setAccountNotFound(false);
     const formattedPhone = formatPhoneNumber(phone);
 
     if (!isValidPhone(formattedPhone)) {
-      setErrorMessage("Please enter a valid international phone number.");
+      setErrorMessage("Enter a complete phone number with its country code, such as +1 or +44.");
       return;
     }
 
@@ -260,7 +267,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
         .maybeSingle();
 
       if (error) {
-        setErrorMessage("Authentication failed. Please check your connection.");
+        setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t check that number just now. Please try again."));
         setLoading(false);
         return;
       }
@@ -271,7 +278,8 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
         setPin("");
         setConfirmPin("");
         setPhone(formattedPhone);
-        setIsSignUp(true);
+        setAccountNotFound(true);
+        setErrorMessage("We couldn't find an account matching this number. Would you like to create a new account?");
         setLoading(false);
         return;
       }
@@ -280,8 +288,8 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       setPhone(data.phone);
       const hasPin = await getNotificationPinStatus(data.phone);
       setAuthStep(hasPin ? "pin" : "legacy-pin");
-    } catch {
-      setErrorMessage("Failed to authenticate. Please try again.");
+    } catch (error) {
+      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t sign you in just now. Check your connection and try again."));
     } finally {
       setLoading(false);
     }
@@ -311,10 +319,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
 
       onSuccess(userData);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not verify PIN. Please try again.";
-      setErrorMessage(message.includes("401") || message.includes("Invalid sign-in")
-        ? "Incorrect PIN. Please try again."
-        : message);
+      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t verify that PIN just now. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -360,8 +365,8 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       }
 
       onSuccess(userData);
-    } catch {
-      setErrorMessage("Could not save Security PIN. Please try again.");
+    } catch (error) {
+      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t save your PIN just now. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -484,7 +489,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       onSuccess(userData);
     } catch (err) {
       console.error("Profile registration failed:", err);
-      setErrorMessage("Registration failed. Please check your details and try again.");
+      setErrorMessage(getFriendlyErrorMessage(err, "We couldn’t create your account just now. Check your details and try again."));
     } finally {
       setLoading(false);
     }
@@ -510,7 +515,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       {isSignUp ? (
         <form onSubmit={handleSignUpSubmit} className="my-auto py-4 space-y-4">
           {errorMessage && (
-            <div className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
+            <div role="alert" className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
               {errorMessage}
             </div>
           )}
@@ -675,7 +680,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       ) : authStep === "legacy-pin" && existingProfile ? (
         <form onSubmit={handleLegacyPinSetup} className="my-auto py-4 space-y-4">
           {errorMessage && (
-            <div className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
+            <div role="alert" className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
               {errorMessage}
             </div>
           )}
@@ -758,7 +763,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       ) : authStep === "pin" && existingProfile ? (
         <form onSubmit={handlePinLogin} className="my-auto py-4 space-y-4">
           {errorMessage && (
-            <div className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
+            <div role="alert" className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
               {errorMessage}
             </div>
           )}
@@ -823,7 +828,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       ) : (
         <form onSubmit={handlePhoneLogin} className="my-auto py-4 space-y-4">
           {errorMessage && (
-            <div className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
+            <div role="alert" className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
               {errorMessage}
             </div>
           )}
@@ -870,6 +875,19 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
               </>
             )}
           </button>
+          {accountNotFound && (
+            <button
+              type="button"
+              onClick={() => {
+                setIsSignUp(true);
+                setAccountNotFound(false);
+                setErrorMessage(null);
+              }}
+              className="w-full min-h-11 rounded-xl border border-yellow-500/50 px-4 py-2.5 text-sm font-bold text-zinc-900 transition-colors hover:bg-yellow-400/15 dark:text-white"
+            >
+              Create a new account
+            </button>
+          )}
         </form>
       )}
 
@@ -879,6 +897,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
             type="button"
             onClick={() => {
               resetFormState();
+              setAccountNotFound(false);
               setIsSignUp(!isSignUp);
             }}
             className="text-xs font-bold text-zinc-500 hover:text-black dark:hover:text-white transition-colors"

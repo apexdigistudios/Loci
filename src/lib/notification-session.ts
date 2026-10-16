@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 
 const SESSION_STORAGE_KEY = "loci_notification_session";
 
@@ -24,11 +25,13 @@ export async function createNotificationSession(
         const payload = await response.clone().json() as { error?: string };
         message = payload.error || "";
       } catch {}
-      if (message) throw new Error(message);
+      if (message) throw new Error(getFriendlyErrorMessage(message));
     }
-    throw new Error(error.message);
+    throw new Error(getFriendlyErrorMessage(error));
   }
-  if (!data?.token || !data.expiresAt) throw new Error("Notification session was not issued.");
+  if (!data?.token || !data.expiresAt) {
+    throw new Error("We couldn’t finish signing you in. Please try again.");
+  }
 
   localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data));
 }
@@ -55,7 +58,7 @@ export function clearNotificationSession(): void {
 
 export async function invokeNotificationApi<T>(body: Record<string, unknown>): Promise<T> {
   const token = getNotificationSessionToken();
-  if (!token) throw new Error("Your notification session expired. Sign in again.");
+  if (!token) throw new Error("Your sign-in has expired. Please sign in again to continue.");
 
   const { data, error } = await supabase.functions.invoke<T>("send-push", {
     body,
@@ -68,9 +71,9 @@ export async function invokeNotificationApi<T>(body: Record<string, unknown>): P
       clearNotificationSession();
       window.dispatchEvent(new Event("loci:notification-session-expired"));
     }
-    throw new Error(error.message);
+    throw new Error(getFriendlyErrorMessage(error));
   }
-  if (data == null) throw new Error("The notification service returned no response.");
+  if (data == null) throw new Error("We couldn’t complete that request. Please try again.");
   return data;
 }
 
@@ -88,6 +91,6 @@ export async function getNotificationPinStatus(phone: string): Promise<boolean> 
   const { data, error } = await supabase.functions.invoke<{ hasPin: boolean }>("send-push", {
     body: { action: "check_pin_status", phone },
   });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(getFriendlyErrorMessage(error, "We couldn’t check your account just now. Please try again."));
   return data?.hasPin === true;
 }

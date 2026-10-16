@@ -175,11 +175,11 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   };
 
   const handleTestPush = async () => {
-    if (!userId) return "User profile is still loading.";
+    if (!userId) return "Your profile is still loading. Please try again in a moment.";
     const result = await sendPushTestNotification(userId);
     return result.ok
-      ? `Test push accepted by ${result.data?.delivered ?? 0} device subscription(s).`
-      : `Test push failed: ${result.reason}.`;
+      ? `A test notification was sent to ${result.data?.delivered ?? 0} device${result.data?.delivered === 1 ? "" : "s"}.`
+      : result.reason || "We couldn’t send a test notification just now. Please try again.";
   };
 
   const triggerLocationPrompt = () => {
@@ -489,7 +489,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const handleStartSession = async (
     e: React.FormEvent,
     coordinates?: { latitude: number; longitude: number }
-  ) => {
+  ): Promise<boolean> => {
     e.preventDefault();
     void prepareAlertFeedback();
     const finalMins = Number(durationMinutes) || 30;
@@ -536,6 +536,9 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         .select()
         .single();
 
+      if (error) throw error;
+      if (!data) throw new Error("Session could not be saved.");
+
       if (!error && data) {
         setActiveSession(data);
         if (userId) {
@@ -575,12 +578,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         }
       }
     } catch (err) {
-      console.error("Supabase Session creation error:", err);
+      console.error("Session creation failed:", err);
+      return false;
     } finally {
       setSessionLoading(false);
       setDestination("");
       setNotes("");
     }
+    return true;
   };
 
   const handleSafeCheckin = async (): Promise<boolean> => {
@@ -588,12 +593,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     const checkedInAt = new Date().toISOString();
 
     if (!activeSession.id.startsWith("local-")) {
-      const { error } = await supabase
-        .from("checkin_sessions")
-        .update({ last_user_checkin_at: checkedInAt })
-        .eq("id", activeSession.id)
-        .eq("status", "active");
-      if (error) {
+      try {
+        const { error } = await supabase
+          .from("checkin_sessions")
+          .update({ last_user_checkin_at: checkedInAt })
+          .eq("id", activeSession.id)
+          .eq("status", "active");
+        if (error) throw error;
+      } catch (error) {
         console.error("Failed to record safety check-in:", error);
         return false;
       }
