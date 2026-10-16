@@ -44,6 +44,13 @@ export async function queueOfflineAction(
       payload,
       created_at: new Date().toISOString(),
     });
+    if ("serviceWorker" in navigator) {
+      const registration = await navigator.serviceWorker.ready;
+      const syncRegistration = registration as ServiceWorkerRegistration & {
+        sync?: { register: (tag: string) => Promise<void> };
+      };
+      await syncRegistration.sync?.register("deloci-offline-sync");
+    }
   } catch (error) {
     console.error("Failed to add action to offline queue:", error);
   }

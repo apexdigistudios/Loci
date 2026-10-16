@@ -7,8 +7,8 @@ import { supabase } from "@/lib/supabase";
 import { cleanPhone } from "@/lib/utils";
 import { requestNotificationPermission, type NotificationPermissionResult } from "@/lib/notifications";
 import { sendPushTestNotification, subscribeUserToPush } from "@/lib/push-notifications";
-import { prepareAlertFeedback } from "@/lib/alerts";
-import { onSessionOverdue } from "@/lib/session-notifications";
+import { dispatchAlert, prepareAlertFeedback } from "@/lib/alerts";
+import { getNotificationSessionToken, invokeNotificationApi } from "@/lib/notification-session";
 
 import { HomePage } from "@/components/pages/home-page";
 import { SessionPage } from "@/components/pages/session-page";
@@ -133,18 +133,41 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   }, [userId]);
 
   useEffect(() => {
-    setMounted(true);
-    if (typeof window !== "undefined" && "Notification" in window) {
-      setNotificationPermission(Notification.permission);
-    }
+    const frameId = window.requestAnimationFrame(() => {
+      setMounted(true);
+      if ("Notification" in window) setNotificationPermission(Notification.permission);
+    });
+    return () => window.cancelAnimationFrame(frameId);
   }, []);
 
   useEffect(() => {
-    const sharedSessionId = new URLSearchParams(window.location.search).get("sharedSessionId");
-    if (!sharedSessionId) return;
-    setRequestedSharedSessionId(sharedSessionId);
-    setActiveTab("contacts");
-    window.history.replaceState({}, "", window.location.pathname);
+    if (!userId) return;
+    if (!getNotificationSessionToken()) {
+      onLogout();
+      return;
+    }
+    const handleExpiredSession = () => onLogout();
+    window.addEventListener("loci:notification-session-expired", handleExpiredSession);
+    return () => window.removeEventListener("loci:notification-session-expired", handleExpiredSession);
+  }, [userId, onLogout]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requestedTab = params.get("tab");
+    const allowedTabs = ["home", "session", "contacts", "share", "profile", "notifications"] as const;
+    const validTab = allowedTabs.includes(requestedTab as typeof allowedTabs[number])
+      ? requestedTab as typeof allowedTabs[number]
+      : null;
+    const sharedSessionId = params.get("sharedSessionId");
+    const frameId = window.requestAnimationFrame(() => {
+      if (validTab) setActiveTab(validTab);
+      if (sharedSessionId) {
+        setRequestedSharedSessionId(sharedSessionId);
+        setActiveTab("contacts");
+      }
+    });
+    if (requestedTab || sharedSessionId) window.history.replaceState({}, "", window.location.pathname);
+    return () => window.cancelAnimationFrame(frameId);
   }, []);
 
   const triggerNotificationPrompt = async () => {
@@ -278,43 +301,39 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   }, [userPhone]);
 
   useEffect(() => {
-    loadUserData();
+    const frameId = window.requestAnimationFrame(() => void loadUserData());
+    return () => window.cancelAnimationFrame(frameId);
   }, [loadUserData]);
 
   const fetchUnreadNotificationCount = useCallback(async () => {
-    const ownerFilter = userId
-      ? `user_phone.eq.${userPhone},user_id.eq.${userId}`
-      : `user_phone.eq.${userPhone}`;
-
-    const { count, error } = await supabase
-      .from("notifications")
-      .select("id", { count: "exact", head: true })
-      .eq("is_read", false)
-      .or(ownerFilter);
-
-    if (error) {
-      console.error("Failed to load unread notification count:", error);
+    if (!userId) {
+      setUnreadNotificationCount(0);
       return;
     }
-    setUnreadNotificationCount(count ?? 0);
-  }, [userId, userPhone]);
+    try {
+      const { count } = await invokeNotificationApi<{ count: number }>({ action: "unread_count" });
+      setUnreadNotificationCount(count);
+    } catch (error) {
+      console.error("Failed to load unread notification count:", error);
+    }
+  }, [userId]);
 
   useEffect(() => {
-    queueMicrotask(() => void fetchUnreadNotificationCount());
+    if (!userId) return;
+    const countTimer = window.setTimeout(() => void fetchUnreadNotificationCount(), 0);
 
     const channel = supabase
-      .channel(`notifications:${userId ?? userPhone}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "notifications" },
-        () => void fetchUnreadNotificationCount()
-      )
+      .channel(`notifications:${userId}`, { config: { private: false } })
+      .on("broadcast", { event: "changed" }, (payload) => {
+        if (payload.payload?.userId === userId) void fetchUnreadNotificationCount();
+      })
       .subscribe();
 
     return () => {
+      window.clearTimeout(countTimer);
       void supabase.removeChannel(channel);
     };
-  }, [fetchUnreadNotificationCount, userId, userPhone]);
+  }, [fetchUnreadNotificationCount, userId]);
 
   const fetchReceivedSessions = useCallback(async () => {
     const contactPhones = new Set(contacts
@@ -433,9 +452,17 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
       if (now > expectedTime && overdueAlertSentRef.current !== activeSession.id) {
         overdueAlertSentRef.current = activeSession.id;
-        const senderDisplayName = nickname || fullName || "Your friend";
-        const contactPhones = contacts.map((c) => c.phone);
-        void onSessionOverdue(senderDisplayName, activeSession.destination, contactPhones);
+        void dispatchAlert({
+          userIds: contacts.map((contact) => contact.contact_user_id || contact.phone),
+          title: "Urgent: Missed Check-In Alert",
+          message: `${nickname || fullName || "Your friend"} was expected at ${activeSession.destination} and has not checked in.`,
+          type: "guardian_alert",
+          url: "/main?tab=contacts",
+          sessionId: activeSession.id,
+          metadata: { destination: activeSession.destination },
+          playFeedback: false,
+          showLocal: false,
+        });
       }
     };
 
@@ -491,28 +518,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     const selectedContacts = contacts.filter((contact) => selectedContactIds.includes(contact.id));
 
     try {
-      const { data: notification, error: notifError } = await supabase
-        .from("notifications")
-        .insert({
-          user_phone: userPhone,
-          user_id: userId,
-          title: "Session Started 🚀",
-          message: `Your safety watch session to ${destName} is active.`,
-          type: "session",
-          is_read: false,
-          created_at: new Date().toISOString(),
-        })
-        .select("id")
-        .single();
-
-      if (notifError || !notification) {
-        console.error("Failed to insert session notification:", notifError ?? "No notification row returned");
-      }
-    } catch (error) {
-      console.error("Failed to insert session notification:", error);
-    }
-
-    try {
       const { data, error } = await supabase
         .from("checkin_sessions")
         .insert({
@@ -533,7 +538,29 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
       if (!error && data) {
         setActiveSession(data);
+        if (userId) {
+          void dispatchAlert({
+            userIds: userId,
+            title: "Session Started",
+            message: `Your safety watch session to ${destName} is active.`,
+            type: "session_start",
+            sessionId: data.id,
+            playFeedback: false,
+            showLocal: false,
+          });
+        }
         if (selectedContacts.length > 0) {
+          void dispatchAlert({
+            userIds: selectedContacts.map((contact) => contact.contact_user_id || contact.phone),
+            title: "Safety Session Shared",
+            message: `A safety session heading to ${destName} has been shared with you.`,
+            type: "session_start",
+            url: "/main?tab=contacts",
+            sessionId: data.id,
+            metadata: { destination: destName },
+            playFeedback: false,
+            showLocal: false,
+          });
           const { error: recipientsError } = await supabase
             .from("session_recipients")
             .insert(selectedContacts.map((contact) => ({
@@ -556,8 +583,8 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     }
   };
 
-  const handleSafeCheckin = async () => {
-    if (!activeSession) return;
+  const handleSafeCheckin = async (): Promise<boolean> => {
+    if (!activeSession) return false;
     const checkedInAt = new Date().toISOString();
 
     if (!activeSession.id.startsWith("local-")) {
@@ -568,7 +595,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         .eq("status", "active");
       if (error) {
         console.error("Failed to record safety check-in:", error);
-        return;
+        return false;
       }
     }
 
@@ -577,11 +604,13 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     if (typeof window !== "undefined") {
       localStorage.setItem("loci_active_session", JSON.stringify(updatedSession));
     }
-
+    return true;
   };
 
-  const handleCompleteSession = async () => {
-    const currentId = activeSession?.id;
+  const handleCompleteSession = async (): Promise<boolean> => {
+    const sessionToComplete = activeSession;
+    const currentId = sessionToComplete?.id;
+    if (!currentId) return false;
     setActiveSession(null);
     if (typeof window !== "undefined") {
       localStorage.removeItem("loci_active_session");
@@ -589,12 +618,24 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
     if (currentId && !currentId.startsWith("local-")) {
       setSessionLoading(true);
-      await supabase
-        .from("checkin_sessions")
-        .update({ status: "completed" })
-        .eq("id", currentId);
-      setSessionLoading(false);
+      try {
+        const { error } = await supabase
+          .from("checkin_sessions")
+          .update({ status: "completed" })
+          .eq("id", currentId);
+        if (error) throw error;
+      } catch (error) {
+        console.error("Failed to end safety session:", error);
+        setActiveSession(sessionToComplete);
+        if (typeof window !== "undefined") {
+          localStorage.setItem("loci_active_session", JSON.stringify(sessionToComplete));
+        }
+        return false;
+      } finally {
+        setSessionLoading(false);
+      }
     }
+    return true;
   };
 
   const handleAddManualContact = async (
@@ -814,7 +855,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
             {activeTab === "notifications" && (
               <NotificationsPage
-                userPhone={userPhone}
                 userId={userId}
                 onBack={() => setActiveTab("home")}
               />

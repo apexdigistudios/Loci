@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { Login, UserData } from "@/components/login";
 import { MainApp } from "@/components/main-app";
 import { SplashScreen } from "@/components/splash-screen";
+import { endNotificationSession } from "@/lib/notification-session";
 
 export default function MainPage() {
   const [userPhone, setUserPhone] = useState<string | null>(null);
@@ -23,6 +24,7 @@ export default function MainPage() {
   };
 
   const handleLogout = () => {
+    void endNotificationSession();
     localStorage.removeItem("loci_user_phone");
     setUserPhone(null);
   };

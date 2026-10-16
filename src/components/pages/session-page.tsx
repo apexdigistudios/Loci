@@ -23,7 +23,7 @@ import { supabase } from "@/lib/supabase";
 import { normalizePhone } from "@/lib/utils";
 import { SatelliteMap } from "@/components/ui/satellite-map";
 import { subscribeUserToPush } from "@/lib/push-notifications";
-import { triggerAlertFeedback, sendPushAlert } from "@/lib/alerts";
+import { dispatchAlert } from "@/lib/alerts";
 
 interface Contact {
   id: string;
@@ -68,8 +68,8 @@ interface SessionPageProps {
   toggleContactSelection: (id: string) => void;
   sessionLoading: boolean;
   handleStartSession: (e: React.FormEvent, coordinates?: SessionCoordinates) => void;
-  handleCompleteSession: () => void;
-  handleSafeCheckin: () => void;
+  handleCompleteSession: () => void | Promise<boolean>;
+  handleSafeCheckin: () => void | Promise<boolean>;
   onNavigate: (tab: "home" | "session" | "contacts" | "share" | "profile") => void;
 }
 
@@ -122,6 +122,7 @@ export function SessionPage({
 
   const [targetEndTime, setTargetEndTime] = useState<number | null>(null);
   const [remainingSeconds, setRemainingSeconds] = useState<number>(0);
+  const [clockNow, setClockNow] = useState(0);
 
   const [contactSelectionMode, setContactSelectionMode] = useState<"individual" | "groups">("individual");
 
@@ -172,8 +173,8 @@ export function SessionPage({
 
   useEffect(() => {
     if (!destination || destination.trim().length < 2 || !showSuggestions) {
-      setSuggestions([]);
-      return;
+      const frameId = window.requestAnimationFrame(() => setSuggestions([]));
+      return () => window.cancelAnimationFrame(frameId);
     }
 
     const controller = new AbortController();
@@ -338,25 +339,30 @@ export function SessionPage({
   }, []);
 
   useEffect(() => {
-    if (activeSession?.expected_arrival_at) {
-      setTargetEndTime(new Date(activeSession.expected_arrival_at).getTime());
-    } else {
-      const targetDate = new Date();
-      targetDate.setDate(targetDate.getDate() + selectedDayOffset);
-      const [hrs, mins] = returnTimeStr.split(":").map(Number);
-      if (!isNaN(hrs) && !isNaN(mins)) {
-        targetDate.setHours(hrs, mins, 0, 0);
+    const frameId = window.requestAnimationFrame(() => {
+      if (activeSession?.expected_arrival_at) {
+        setTargetEndTime(new Date(activeSession.expected_arrival_at).getTime());
+      } else {
+        const targetDate = new Date();
+        targetDate.setDate(targetDate.getDate() + selectedDayOffset);
+        const [hours, minutes] = returnTimeStr.split(":").map(Number);
+        if (!Number.isNaN(hours) && !Number.isNaN(minutes)) {
+          targetDate.setHours(hours, minutes, 0, 0);
+        }
+        const calculatedMinutes = Math.max(1, Math.round((targetDate.getTime() - Date.now()) / 60000));
+        setDurationMinutes(calculatedMinutes);
+        setTargetEndTime(targetDate.getTime());
       }
-      const calculatedMins = Math.max(1, Math.round((targetDate.getTime() - Date.now()) / 60000));
-      setDurationMinutes(calculatedMins);
-      setTargetEndTime(targetDate.getTime());
-    }
+    });
+    return () => window.cancelAnimationFrame(frameId);
   }, [selectedDayOffset, returnTimeStr, activeSession, setDurationMinutes]);
 
   useEffect(() => {
     if (!targetEndTime) return;
     const updateTimer = () => {
-      const diffSecs = Math.floor((targetEndTime - Date.now()) / 1000);
+      const now = Date.now();
+      const diffSecs = Math.floor((targetEndTime - now) / 1000);
+      setClockNow(now);
       setRemainingSeconds(Math.max(0, diffSecs));
     };
 
@@ -365,7 +371,7 @@ export function SessionPage({
     return () => clearInterval(interval);
   }, [targetEndTime]);
 
-  const isSafetyCheckinDue = !!activeSession && Date.now() - new Date(
+  const isSafetyCheckinDue = !!activeSession && clockNow - new Date(
     activeSession.last_user_checkin_at || activeSession.expected_arrival_at
   ).getTime() >= (activeSession.user_reminder_mins || 15) * 60000;
 
@@ -389,32 +395,47 @@ export function SessionPage({
       if (Number.isFinite(lastCheckinAt) && now - lastCheckinAt >= reminderInterval
         && now - lastCheckinPushRef.current > 120000) {
         lastCheckinPushRef.current = now;
-        triggerAlertFeedback();
-        sendPushAlert(
-          userId || "",
-          "Safety Check-in Required ⏱️",
-          `Please confirm you are safe on your trip to ${activeSession.destination || "your destination"}.`
-        );
+        void dispatchAlert({
+          userIds: userId || "",
+          title: "Safety Check-In Required",
+          message: `Please confirm you are safe on your trip to ${activeSession.destination || "your destination"}.`,
+          type: "checkin",
+          sessionId: activeSession.id,
+        });
       }
 
       const expectedArrival = new Date(activeSession.expected_arrival_at).getTime();
       if (Number.isFinite(expectedArrival) && now >= expectedArrival && !lastExpiryPushRef.current) {
         lastExpiryPushRef.current = true;
-        triggerAlertFeedback();
-        sendPushAlert(userId || "", "Expected Arrival Time Reached 🚨", "Your session target arrival time has passed.");
+        void dispatchAlert({
+          userIds: userId || "",
+          title: "Expected Arrival Time Reached",
+          message: "Your session target arrival time has passed.",
+          type: "emergency",
+          sessionId: activeSession.id,
+        });
       }
 
       const guardianGraceMins = activeSession.contact_reminder_mins || 30;
       const guardianAlertTime = expectedArrival + guardianGraceMins * 60000;
       if (Number.isFinite(guardianAlertTime) && now >= guardianAlertTime && !lastGuardianOverduePushRef.current) {
         lastGuardianOverduePushRef.current = true;
-        triggerAlertFeedback();
-        sendPushAlert(userId || "", "Guardian Alert Escalated 🚨", "You have not ended your session. Your guardians have been alerted.");
-        sendPushAlert(
-          guardianUserIds,
-          "EMERGENCY: Session Overdue 🚨",
-          `Safety session to ${activeSession.destination || "destination"} is overdue and grace period expired without a safe check-in.`
-        );
+        void dispatchAlert({
+          userIds: userId || "",
+          title: "Guardian Alert Escalated",
+          message: "You have not ended your session. Your guardians have been alerted.",
+          type: "guardian_alert",
+          sessionId: activeSession.id,
+        });
+        void dispatchAlert({
+          userIds: guardianUserIds,
+          title: "Emergency: Session Overdue",
+          message: `Safety session to ${activeSession.destination || "destination"} is overdue and its grace period expired without a safe check-in.`,
+          type: "emergency",
+          url: "/main?tab=contacts",
+          sessionId: activeSession.id,
+          metadata: { destination: activeSession.destination },
+        });
       }
     };
 
@@ -437,20 +458,28 @@ export function SessionPage({
     setIsCheckingIn(true);
     try {
       lastCheckinPushRef.current = 0;
-      await Promise.resolve(handleSafeCheckin());
+      const checkinSaved = await Promise.resolve(handleSafeCheckin());
+      if (checkinSaved === false) return;
 
-      sendPushAlert(
-        userId || "",
-        "Check-In Confirmed ✅",
-        "You have successfully confirmed you are safe."
-      );
+      void dispatchAlert({
+        userIds: userId || "",
+        title: "Check-In Confirmed",
+        message: "You have successfully confirmed you are safe.",
+        type: "checkin",
+        sessionId: activeSession?.id,
+      });
 
       if (guardianUserIds.length > 0) {
-        sendPushAlert(
-          guardianUserIds,
-          "Guardian Check-In Update 🟢",
-          `Your contact has checked in safely for their trip to ${activeSession?.destination || "their destination"}.`
-        );
+        void dispatchAlert({
+          userIds: guardianUserIds,
+          title: "Guardian Check-In Update",
+          message: `Your contact has checked in safely for their trip to ${activeSession?.destination || "their destination"}.`,
+          type: "checkin",
+          url: "/main?tab=contacts",
+          sessionId: activeSession?.id,
+          playFeedback: false,
+          showLocal: false,
+        });
       }
     } finally {
       setTimeout(() => setIsCheckingIn(false), 800);
@@ -458,20 +487,28 @@ export function SessionPage({
   };
 
   const onEndSessionClick = async () => {
-    handleCompleteSession();
+    const sessionEnded = await Promise.resolve(handleCompleteSession());
+    if (sessionEnded === false) return;
 
-    sendPushAlert(
-      userId || "",
-      "Session Ended Successfully ✅",
-      "Your safety watch session has been completed and closed."
-    );
+    void dispatchAlert({
+      userIds: userId || "",
+      title: "Session Ended Successfully",
+      message: "Your safety watch session has been completed and closed.",
+      type: "session_end",
+      sessionId: activeSession?.id,
+    });
 
     if (guardianUserIds.length > 0) {
-      sendPushAlert(
-        guardianUserIds,
-        "Session Ended Safely ✅",
-        `The safety session heading to ${activeSession?.destination || destination || "destination"} has ended.`
-      );
+      void dispatchAlert({
+        userIds: guardianUserIds,
+        title: "Session Ended Safely",
+        message: `The safety session heading to ${activeSession?.destination || destination || "destination"} has ended.`,
+        type: "session_end",
+        url: "/main?tab=contacts",
+        sessionId: activeSession?.id,
+        playFeedback: false,
+        showLocal: false,
+      });
     }
   };
 
@@ -610,20 +647,6 @@ export function SessionPage({
     }
 
     handleStartSession(event, locationCoords || undefined);
-
-    sendPushAlert(
-      userId || "",
-      "Session Started 🚀",
-      `Your safety watch session to ${destination} is active.`
-    );
-
-    if (guardianUserIds.length > 0) {
-      sendPushAlert(
-        guardianUserIds,
-        "Safety Session Shared 🛡️",
-        `A safety session heading to ${destination} has been shared with you.`
-      );
-    }
   };
 
   const selectSuggestion = (item: SuggestionItem) => {
@@ -1064,7 +1087,7 @@ export function SessionPage({
                         onChange={(event) => setUserReminderMins(event.target.value ? Number(event.target.value) : "")}
                         className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl px-4 py-3.5 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400"
                       />
-                      <p className="text-[10px] text-zinc-500">How often your phone asks "Confirm I'm safe".</p>
+                      <p className="text-[10px] text-zinc-500">How often your phone asks &quot;Confirm I&apos;m safe&quot;.</p>
                     </div>
 
                     <div className="space-y-1.5">

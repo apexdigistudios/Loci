@@ -12,10 +12,15 @@ export function OfflineSyncProvider({ children }: { children: React.ReactNode })
     const handleOnline = () => {
       void flushOfflineQueue();
     };
+    const handleServiceWorkerMessage = (event: MessageEvent<{ type?: string }>) => {
+      if (event.data?.type === "FLUSH_OFFLINE_QUEUE") void flushOfflineQueue();
+    };
 
     window.addEventListener("online", handleOnline);
+    navigator.serviceWorker?.addEventListener("message", handleServiceWorkerMessage);
     return () => {
       window.removeEventListener("online", handleOnline);
+      navigator.serviceWorker?.removeEventListener("message", handleServiceWorkerMessage);
     };
   }, []);
 

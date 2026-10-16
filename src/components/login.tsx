@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { User, UserCheck, Phone, Lock, ArrowRight, Loader2, LogIn, ImagePlus, KeyRound, ChevronLeft, ShieldCheck } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { normalizePhone, isValidPhone } from "@/lib/utils";
+import { createNotificationSession, getNotificationPinStatus } from "@/lib/notification-session";
 import { SplashScreen } from "@/components/splash-screen";
 
 export interface UserData {
@@ -42,23 +43,17 @@ const COUNTRIES: CountryInfo[] = [
 ];
 
 interface AuthProfile {
+  id: string;
   phone: string;
   full_name: string | null;
   nickname: string | null;
   avatar_url: string | null;
-  pin_hash: string | null;
 }
 
 const PIN_HASH_ITERATIONS = 310000;
 
 function bytesToHex(bytes: Uint8Array) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function hexToBytes(hex: string) {
-  if (!/^(?:[\da-fA-F]{2})+$/.test(hex)) return null;
-  const matched = hex.match(/.{1,2}/g);
-  return matched ? new Uint8Array(matched.map((pair) => Number.parseInt(pair, 16))) : null;
 }
 
 async function hashPin(pin: string) {
@@ -70,36 +65,6 @@ async function hashPin(pin: string) {
     256
   );
   return `pbkdf2$${PIN_HASH_ITERATIONS}$${bytesToHex(salt)}$${bytesToHex(new Uint8Array(derived))}`;
-}
-
-async function verifyPin(pin: string, storedHash: string) {
-  if (!storedHash) return false;
-  const parts = storedHash.split("$");
-  if (parts.length !== 4) return false;
-
-  const [algorithm, iterationText, saltHex, expectedHex] = parts;
-  const iterations = Number(iterationText);
-  if (
-    algorithm !== "pbkdf2" ||
-    !/^\d+$/.test(iterationText) ||
-    !Number.isSafeInteger(iterations) ||
-    iterations < 100000 ||
-    !/^[\da-fA-F]{32}$/.test(saltHex) ||
-    !/^[\da-fA-F]{64}$/.test(expectedHex)
-  ) return false;
-
-  const salt = hexToBytes(saltHex);
-  const expected = hexToBytes(expectedHex);
-  if (!salt || !expected) return false;
-
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
-  const derived = new Uint8Array(await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
-    key,
-    256
-  ));
-  if (derived.length !== expected.length || derived.length === 0) return false;
-  return derived.reduce((difference, byte, index) => difference | (byte ^ expected[index]), 0) === 0;
 }
 
 export function Login({ onSuccess, showSplash = true }: LoginProps) {
@@ -174,10 +139,10 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       };
     }
 
-    setPhone(phoneToVerify);
+    const phoneFrameId = window.requestAnimationFrame(() => setPhone(phoneToVerify));
     supabase
       .from("users")
-      .select("phone, full_name, nickname, avatar_url, pin_hash")
+      .select("id, phone, full_name, nickname, avatar_url")
       .eq("phone", phoneToVerify)
       .maybeSingle()
       .then(({ data, error }) => {
@@ -191,10 +156,13 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
         if (data) {
           setExistingProfile(data);
           setPhone(data.phone);
-          setAuthStep("pin");
-          if (!data.pin_hash) {
-            setErrorMessage("This profile has no security PIN set.");
-          }
+          void getNotificationPinStatus(data.phone).then((hasPin) => {
+            if (cancelled) return;
+            setAuthStep(hasPin ? "pin" : "legacy-pin");
+            if (!hasPin) setErrorMessage("Set a security PIN to continue.");
+          }).catch(() => {
+            if (!cancelled) setErrorMessage("Could not check your PIN status. Please try again.");
+          });
         } else {
           localStorage.removeItem("loci_user_profile");
           localStorage.removeItem("loci_saved_phone");
@@ -206,23 +174,27 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
         if (!cancelled) setProfileCheckComplete(true);
       });
 
-    try {
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      if (tz.includes("Accra") || tz.includes("Ghana")) {
-        setDetectedCountry(COUNTRIES.find((c) => c.code === "GH") || COUNTRIES[0]);
-      } else if (tz.includes("London") || tz.includes("Europe/London")) {
-        setDetectedCountry(COUNTRIES.find((c) => c.code === "GB") || COUNTRIES[0]);
-      } else if (tz.includes("Lagos")) {
-        setDetectedCountry(COUNTRIES.find((c) => c.code === "NG") || COUNTRIES[0]);
-      } else if (tz.includes("America")) {
-        setDetectedCountry(COUNTRIES.find((c) => c.code === "US") || COUNTRIES[1]);
+    const countryFrameId = window.requestAnimationFrame(() => {
+      try {
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (timezone.includes("Accra") || timezone.includes("Ghana")) {
+          setDetectedCountry(COUNTRIES.find((country) => country.code === "GH") || COUNTRIES[0]);
+        } else if (timezone.includes("London") || timezone.includes("Europe/London")) {
+          setDetectedCountry(COUNTRIES.find((country) => country.code === "GB") || COUNTRIES[0]);
+        } else if (timezone.includes("Lagos")) {
+          setDetectedCountry(COUNTRIES.find((country) => country.code === "NG") || COUNTRIES[0]);
+        } else if (timezone.includes("America")) {
+          setDetectedCountry(COUNTRIES.find((country) => country.code === "US") || COUNTRIES[1]);
+        }
+      } catch {
+        setDetectedCountry(COUNTRIES[0]);
       }
-    } catch {
-      setDetectedCountry(COUNTRIES[0]);
-    }
+    });
 
     return () => {
       cancelled = true;
+      window.cancelAnimationFrame(phoneFrameId);
+      window.cancelAnimationFrame(countryFrameId);
     };
   }, []);
 
@@ -283,7 +255,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     try {
       const { data, error } = await supabase
         .from("users")
-        .select("phone, full_name, nickname, avatar_url, pin_hash")
+        .select("id, phone, full_name, nickname, avatar_url")
         .eq("phone", formattedPhone)
         .maybeSingle();
 
@@ -306,12 +278,8 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
 
       setExistingProfile(data);
       setPhone(data.phone);
-
-      if (!data.pin_hash) {
-        setAuthStep("legacy-pin");
-      } else {
-        setAuthStep("pin");
-      }
+      const hasPin = await getNotificationPinStatus(data.phone);
+      setAuthStep(hasPin ? "pin" : "legacy-pin");
     } catch {
       setErrorMessage("Failed to authenticate. Please try again.");
     } finally {
@@ -322,19 +290,13 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
   const handlePinLogin = async (event: React.FormEvent) => {
     event.preventDefault();
     if (loading) return;
-    if (!existingProfile?.pin_hash || !/^\d{4}$/.test(loginPin)) return;
+    if (!existingProfile || !/^\d{4}$/.test(loginPin)) return;
 
     setLoading(true);
     setErrorMessage(null);
 
     try {
-      const valid = await verifyPin(loginPin, existingProfile.pin_hash);
-      if (!valid) {
-        setErrorMessage("Incorrect PIN. Please try again.");
-        setLoginPin("");
-        setLoading(false);
-        return;
-      }
+      await createNotificationSession(existingProfile.id, existingProfile.phone, loginPin);
 
       const userData: UserData = {
         fullName: existingProfile.full_name || "",
@@ -348,8 +310,11 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       }
 
       onSuccess(userData);
-    } catch {
-      setErrorMessage("Could not verify PIN. Please try again.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not verify PIN. Please try again.";
+      setErrorMessage(message.includes("401") || message.includes("Invalid sign-in")
+        ? "Incorrect PIN. Please try again."
+        : message);
     } finally {
       setLoading(false);
     }
@@ -380,6 +345,8 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
         .eq("phone", existingProfile.phone);
 
       if (error) throw error;
+
+      await createNotificationSession(existingProfile.id, existingProfile.phone, pin);
 
       const userData: UserData = {
         fullName: existingProfile.full_name || "",
@@ -431,7 +398,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     try {
       const { data: existingUser } = await supabase
         .from("users")
-        .select("phone, full_name, nickname, avatar_url, pin_hash")
+        .select("id, phone, full_name, nickname, avatar_url")
         .eq("phone", formattedPhone)
         .maybeSingle();
 
@@ -473,7 +440,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
 
       const pinHash = await hashPin(pin);
 
-      const { error: dbError } = await supabase.from("users").upsert(
+      const { data: savedProfile, error: dbError } = await supabase.from("users").upsert(
         {
           full_name: trimmedFullName,
           nickname: trimmedNickname,
@@ -482,9 +449,11 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
           pin_hash: pinHash,
         },
         { onConflict: "phone" }
-      );
+      ).select("id").single();
 
       if (dbError) throw dbError;
+      if (!savedProfile) throw new Error("Could not load the new profile.");
+      await createNotificationSession(savedProfile.id, formattedPhone, pin);
 
       if (typeof window !== "undefined") {
         const referrerNickname = localStorage.getItem("loci_referrer_nickname");

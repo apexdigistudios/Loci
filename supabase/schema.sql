@@ -73,59 +73,42 @@ create table if not exists public.session_recipients (
 
 create table if not exists public.notifications (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid references public.users(id) on delete cascade,
-  user_phone text references public.users(phone) on delete cascade,
+  user_id uuid not null references public.users(id) on delete cascade,
+  sender_id uuid references public.users(id) on delete set null,
   title text not null,
   message text not null,
-  type text not null default 'system',
+  type text not null default 'update',
+  metadata jsonb not null default '{}'::jsonb,
   is_read boolean not null default false,
-  created_at timestamptz not null default now(),
-  constraint notifications_owner_required check (user_id is not null or user_phone is not null)
+  created_at timestamptz not null default now()
 );
+
+drop index if exists public.notifications_user_phone_created_at_idx;
+
+alter table public.notifications
+  drop constraint if exists notifications_owner_required,
+  drop column if exists user_phone,
+  drop column if exists "read";
 
 alter table public.notifications
   add column if not exists user_id uuid references public.users(id) on delete cascade,
-  add column if not exists user_phone text references public.users(phone) on delete cascade,
+  add column if not exists sender_id uuid references public.users(id) on delete set null,
   add column if not exists title text not null default '',
   add column if not exists message text not null default '',
-  add column if not exists type text not null default 'system',
+  add column if not exists type text not null default 'update',
+  add column if not exists metadata jsonb not null default '{}'::jsonb,
   add column if not exists is_read boolean not null default false,
   add column if not exists created_at timestamptz not null default now();
 
-do $$
-begin
-  if exists (
-    select 1 from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'notifications'
-      and column_name = 'read'
-  ) then
-    execute 'update public.notifications set is_read = "read" where is_read is distinct from "read"';
-  end if;
-end $$;
+alter table public.notifications
+  alter column user_id set not null;
 
-create index if not exists notifications_user_phone_created_at_idx
-  on public.notifications(user_phone, created_at desc);
 create index if not exists notifications_user_id_created_at_idx
   on public.notifications(user_id, created_at desc);
 
-do $$
-begin
-  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
-    and not exists (
-      select 1 from pg_publication_tables
-      where pubname = 'supabase_realtime'
-        and schemaname = 'public'
-        and tablename = 'notifications'
-    ) then
-    alter publication supabase_realtime add table public.notifications;
-  end if;
-end $$;
-
 create table if not exists public.user_push_subscriptions (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid references public.users(id) on delete cascade,
-  user_phone text references public.users(phone) on delete cascade,
+  user_id uuid not null references public.users(id) on delete cascade,
   endpoint text not null unique,
   p256dh text not null,
   auth text not null,
@@ -135,21 +118,98 @@ create table if not exists public.user_push_subscriptions (
   updated_at timestamptz not null default now()
 );
 
+drop index if exists public.user_push_subscriptions_user_phone_idx;
+
+alter table public.user_push_subscriptions
+  drop column if exists user_phone;
+
 alter table public.user_push_subscriptions
   add column if not exists user_id uuid references public.users(id) on delete cascade,
   add column if not exists device_info jsonb not null default '{}'::jsonb,
   add column if not exists is_active boolean not null default true,
   add column if not exists updated_at timestamptz not null default now(),
-  alter column user_phone drop not null;
-
-update public.user_push_subscriptions as subscriptions
-set user_id = users.id
-from public.users
-where subscriptions.user_id is null
-  and subscriptions.user_phone = users.phone;
-
-alter table public.user_push_subscriptions
   alter column user_id set not null;
+
+create table if not exists public.notification_app_sessions (
+  token_hash text primary key,
+  user_id uuid not null references public.users(id) on delete cascade,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.notification_pin_attempts (
+  phone text primary key,
+  attempt_count integer not null default 0,
+  window_started_at timestamptz not null default now(),
+  locked_until timestamptz
+);
+
+create or replace function public.begin_notification_pin_attempt(p_phone text)
+returns boolean
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+declare
+  v_attempt_count integer;
+  v_locked_until timestamptz;
+begin
+  insert into public.notification_pin_attempts (phone, attempt_count, window_started_at)
+  values (p_phone, 1, now())
+  on conflict (phone) do update
+  set attempt_count = case
+        when public.notification_pin_attempts.window_started_at < now() - interval '15 minutes' then 1
+        else public.notification_pin_attempts.attempt_count + 1
+      end,
+      window_started_at = case
+        when public.notification_pin_attempts.window_started_at < now() - interval '15 minutes' then now()
+        else public.notification_pin_attempts.window_started_at
+      end,
+      locked_until = case
+        when public.notification_pin_attempts.locked_until > now() then public.notification_pin_attempts.locked_until
+        when public.notification_pin_attempts.window_started_at < now() - interval '15 minutes' then null
+        when public.notification_pin_attempts.attempt_count + 1 >= 6 then now() + interval '15 minutes'
+        else null
+      end
+  returning attempt_count, locked_until into v_attempt_count, v_locked_until;
+
+  return v_attempt_count <= 5 and (v_locked_until is null or v_locked_until <= now());
+end;
+$$;
+
+create or replace function public.reset_notification_pin_attempt(p_phone text)
+returns void
+language sql
+security definer
+set search_path = pg_catalog, public
+as $$
+  delete from public.notification_pin_attempts where phone = p_phone;
+$$;
+
+revoke all on function public.begin_notification_pin_attempt(text) from public, anon, authenticated;
+revoke all on function public.reset_notification_pin_attempt(text) from public, anon, authenticated;
+grant execute on function public.begin_notification_pin_attempt(text) to service_role;
+grant execute on function public.reset_notification_pin_attempt(text) to service_role;
+
+alter table public.notifications enable row level security;
+alter table public.user_push_subscriptions enable row level security;
+alter table public.notification_app_sessions enable row level security;
+alter table public.notification_pin_attempts enable row level security;
+
+do $$
+declare
+  policy_row record;
+begin
+  for policy_row in
+    select schemaname, tablename, policyname
+    from pg_policies
+    where schemaname = 'public'
+      and tablename in ('notifications', 'user_push_subscriptions', 'notification_app_sessions', 'notification_pin_attempts')
+  loop
+    execute format('drop policy %I on %I.%I', policy_row.policyname, policy_row.schemaname, policy_row.tablename);
+  end loop;
+end;
+$$;
 
 -- Phone lookups, feed filters, recipient resolution, and session status queries.
 create index if not exists trusted_contacts_user_phone_idx
@@ -170,12 +230,10 @@ create index if not exists session_recipients_contact_phone_idx
   on public.session_recipients(contact_phone);
 create index if not exists session_recipients_recipient_phone_idx
   on public.session_recipients(recipient_phone);
-create index if not exists user_push_subscriptions_user_phone_idx
-  on public.user_push_subscriptions(user_phone);
 create index if not exists user_push_subscriptions_user_id_idx
   on public.user_push_subscriptions(user_id);
-create index if not exists user_push_subscriptions_user_phone_idx
-  on public.user_push_subscriptions(user_phone);
+create index if not exists notification_app_sessions_user_expires_idx
+  on public.notification_app_sessions(user_id, expires_at);
 
 -- The unique constraint on public.users(phone) creates its phone lookup index.
 

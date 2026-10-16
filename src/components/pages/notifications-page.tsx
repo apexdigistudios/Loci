@@ -1,254 +1,254 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { Bell, ShieldAlert, CheckCircle2, Clock, Trash2, ChevronLeft, Loader2, Check } from "lucide-react";
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  Bell,
+  Check,
+  CheckCircle2,
+  ChevronLeft,
+  Clock3,
+  Flag,
+  Loader2,
+  Mail,
+  MapPin,
+  ShieldAlert,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { invokeNotificationApi } from "@/lib/notification-session";
+
+type NotificationType = "session_start" | "checkin" | "emergency" | "session_end" | "update" | "guardian_alert";
 
 interface NotificationItem {
   id: string;
-  user_id?: string | null;
+  user_id: string;
+  sender_id: string | null;
   title: string;
   message: string;
-  type: "alert" | "checkin" | "system" | "session";
+  type: NotificationType;
+  metadata: Record<string, unknown>;
+  is_read: boolean;
   created_at: string;
-  read?: boolean;
-  is_read?: boolean;
 }
 
 interface NotificationsPageProps {
-  userPhone: string;
   userId: string | null;
   onBack: () => void;
 }
 
-export function NotificationsPage({ userPhone, userId, onBack }: NotificationsPageProps) {
+const TYPE_PRESENTATION: Record<NotificationType, { label: string; icon: LucideIcon; tone: string }> = {
+  session_start: { label: "Session", icon: MapPin, tone: "text-sky-600 dark:text-sky-400" },
+  checkin: { label: "Check-in", icon: CheckCircle2, tone: "text-emerald-600 dark:text-emerald-400" },
+  emergency: { label: "Emergency", icon: ShieldAlert, tone: "text-red-600 dark:text-red-400" },
+  session_end: { label: "Session ended", icon: Flag, tone: "text-teal-600 dark:text-teal-400" },
+  update: { label: "Update", icon: Clock3, tone: "text-amber-600 dark:text-amber-400" },
+  guardian_alert: { label: "Guardian alert", icon: ShieldCheck, tone: "text-orange-600 dark:text-orange-400" },
+};
+
+function formatTimestamp(value: string) {
+  const date = new Date(value);
+  return `${date.toLocaleDateString([], { month: "short", day: "numeric" })} · ${date.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  })}`;
+}
+
+export function NotificationsPage({ userId, onBack }: NotificationsPageProps) {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [clearingAll, setClearingAll] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const fetchNotifications = useCallback(async () => {
+    if (!userId) {
+      setNotifications([]);
+      setLoading(false);
+      return;
+    }
+    try {
+      const result = await invokeNotificationApi<{ notifications: NotificationItem[] }>({ action: "list" });
+      setNotifications(result.notifications || []);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Could not load notifications.");
+    } finally {
+      setLoading(false);
+    }
+  }, [userId]);
 
   useEffect(() => {
-    const ownerFilter = userId
-      ? `user_phone.eq.${userPhone},user_id.eq.${userId}`
-      : `user_phone.eq.${userPhone}`;
+    const initialFetchTimer = window.setTimeout(() => void fetchNotifications(), 0);
+    if (!userId) return () => window.clearTimeout(initialFetchTimer);
 
-    async function fetchNotifications() {
-      setLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from("notifications")
-          .select("*")
-          .or(ownerFilter)
-          .order("created_at", { ascending: false });
-
-        if (!error && data) {
-          const items = (data as NotificationItem[]).map((item) => {
-            const isRead = item.is_read ?? item.read ?? false;
-            return { ...item, is_read: isRead, read: isRead };
-          });
-          setNotifications(items);
-        } else if (error) {
-          console.error("Failed to load notifications:", error);
-          setNotifications([]);
-        }
-      } catch (err) {
-        console.error("Error fetching notifications:", err);
-        setNotifications([]);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    queueMicrotask(() => void fetchNotifications());
     const channel = supabase
-      .channel(`notification-list:${userId ?? userPhone}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "notifications" },
-        () => void fetchNotifications()
-      )
+      .channel(`notifications:${userId}`, { config: { private: false } })
+      .on("broadcast", { event: "changed" }, (payload) => {
+        if (payload.payload?.userId === userId) void fetchNotifications();
+      })
       .subscribe();
+    const refreshTimer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void fetchNotifications();
+    }, 30000);
+    const refreshOnFocus = () => {
+      if (document.visibilityState === "visible") void fetchNotifications();
+    };
+    document.addEventListener("visibilitychange", refreshOnFocus);
+    window.addEventListener("focus", refreshOnFocus);
 
     return () => {
+      window.clearTimeout(initialFetchTimer);
+      window.clearInterval(refreshTimer);
+      document.removeEventListener("visibilitychange", refreshOnFocus);
+      window.removeEventListener("focus", refreshOnFocus);
       void supabase.removeChannel(channel);
     };
-  }, [userId, userPhone]);
+  }, [fetchNotifications, userId]);
 
-  const handleMarkRead = async (id: string) => {
-    const previous = notifications;
-    setNotifications((current) => current.map((item) =>
-      item.id === id ? { ...item, is_read: true, read: true } : item
+  const handleReadToggle = async (item: NotificationItem) => {
+    const nextValue = !item.is_read;
+    setBusyId(item.id);
+    setNotifications((current) => current.map((notification) =>
+      notification.id === item.id ? { ...notification, is_read: nextValue } : notification
     ));
-    const ownerFilter = userId
-      ? `user_phone.eq.${userPhone},user_id.eq.${userId}`
-      : `user_phone.eq.${userPhone}`;
-    const { error } = await supabase
-      .from("notifications")
-      .update({ is_read: true })
-      .eq("id", id)
-      .or(ownerFilter);
-
-    if (error) {
-      console.error("Failed to mark notification as read:", error);
-      setNotifications(previous);
+    try {
+      await invokeNotificationApi({ action: "mark_read", id: item.id, isRead: nextValue });
+    } catch (error) {
+      setNotifications((current) => current.map((notification) =>
+        notification.id === item.id ? { ...notification, is_read: item.is_read } : notification
+      ));
+      setErrorMessage(error instanceof Error ? error.message : "Could not update notification.");
+    } finally {
+      setBusyId(null);
     }
   };
 
-  const handleDeleteOne = async (id: string) => {
-    setDeletingId(id);
+  const handleDelete = async (id: string) => {
     const previous = notifications;
+    setBusyId(id);
     setNotifications((current) => current.filter((item) => item.id !== id));
-    const ownerFilter = userId
-      ? `user_phone.eq.${userPhone},user_id.eq.${userId}`
-      : `user_phone.eq.${userPhone}`;
-    const { error } = await supabase
-      .from("notifications")
-      .delete()
-      .eq("id", id)
-      .or(ownerFilter);
-
-    if (error) {
-      console.error("Failed to delete notification:", error);
+    try {
+      await invokeNotificationApi({ action: "delete", id });
+    } catch (error) {
       setNotifications(previous);
+      setErrorMessage(error instanceof Error ? error.message : "Could not delete notification.");
+    } finally {
+      setBusyId(null);
     }
-    setDeletingId(null);
   };
 
   const handleClearAll = async () => {
     if (notifications.length === 0) return;
-    setClearingAll(true);
     const previous = notifications;
+    setClearingAll(true);
     setNotifications([]);
-    const ownerFilter = userId
-      ? `user_phone.eq.${userPhone},user_id.eq.${userId}`
-      : `user_phone.eq.${userPhone}`;
-    const { error } = await supabase
-      .from("notifications")
-      .delete()
-      .or(ownerFilter);
-
-    if (error) {
-      console.error("Failed to clear notifications:", error);
+    try {
+      await invokeNotificationApi({ action: "clear" });
+    } catch (error) {
       setNotifications(previous);
+      setErrorMessage(error instanceof Error ? error.message : "Could not clear notifications.");
+    } finally {
+      setClearingAll(false);
     }
-    setClearingAll(false);
   };
 
+  const unreadCount = notifications.filter((item) => !item.is_read).length;
+
   return (
-    <div className="space-y-4 max-w-md mx-auto font-sans">
-      {/* Top Navigation */}
-      <div className="flex items-center justify-between pb-2 border-b border-zinc-200 dark:border-zinc-800">
+    <section className="mx-auto w-full max-w-2xl space-y-5">
+      <header className="flex items-center justify-between gap-3 border-b border-zinc-200 pb-3 dark:border-zinc-800">
         <button
+          type="button"
           onClick={onBack}
-          className="flex items-center space-x-1 text-xs font-bold text-zinc-500 hover:text-black dark:hover:text-white transition-colors"
+          className="inline-flex min-h-10 items-center gap-1 rounded-md px-2 text-sm font-semibold text-zinc-500 transition-colors hover:text-zinc-950 dark:hover:text-white"
+          aria-label="Back"
         >
-          <ChevronLeft className="w-4 h-4" />
-          <span>Back</span>
+          <ChevronLeft className="h-4 w-4" />
+          Back
         </button>
-
-        <h2 className="text-sm font-black text-black dark:text-white">Alerts &amp; Activity</h2>
-
+        <div className="min-w-0 text-center">
+          <h2 className="text-base font-extrabold text-zinc-950 dark:text-white">Activity</h2>
+          <p className="text-xs text-zinc-500">{unreadCount} unread</p>
+        </div>
         {notifications.length > 0 ? (
           <button
-            onClick={handleClearAll}
+            type="button"
+            onClick={() => void handleClearAll()}
             disabled={clearingAll}
-            className="text-[11px] font-bold text-red-500 hover:text-red-600 flex items-center space-x-1 disabled:opacity-50 transition-colors"
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-md px-2 text-xs font-bold text-red-600 transition-colors hover:bg-red-500/10 disabled:opacity-50 dark:text-red-400"
           >
-            {clearingAll ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Trash2 className="w-3.5 h-3.5" />
-            )}
-            <span>Clear All</span>
+            {clearingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            Clear all
           </button>
-        ) : (
-          <div className="w-12" />
-        )}
-      </div>
+        ) : <span className="w-16" />}
+      </header>
 
-      {/* Main Notifications List */}
+      {errorMessage && (
+        <p role="alert" className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
+          {errorMessage}
+        </p>
+      )}
+
       {loading ? (
-        <div className="flex items-center justify-center space-x-2 text-xs text-zinc-400 py-12">
-          <Loader2 className="w-4 h-4 animate-spin text-yellow-400" />
-          <span>Loading notifications...</span>
+        <div className="flex items-center justify-center gap-2 py-16 text-sm text-zinc-500" role="status">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading activity
         </div>
       ) : notifications.length === 0 ? (
-        <div className="p-8 rounded-2xl border border-dashed border-zinc-300 dark:border-zinc-800 text-center space-y-2">
-          <Bell className="w-6 h-6 text-zinc-400 mx-auto" />
-          <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-            No recent alerts or notifications.
-          </p>
+        <div className="flex flex-col items-center gap-2 py-16 text-center">
+          <Bell className="h-6 w-6 text-zinc-400" />
+          <p className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Nothing to catch up on</p>
         </div>
       ) : (
-        <div className="space-y-2.5">
-          {notifications.map((item) => (
-            <div
-              key={item.id}
-              className={`p-3.5 rounded-2xl border transition-all flex items-start justify-between gap-3 ${
-                item.type === "alert"
-                  ? "bg-red-500/10 border-red-500/20 text-red-900 dark:text-red-200"
-                  : item.type === "checkin"
-                  ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-900 dark:text-emerald-200"
-                  : "bg-zinc-100 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100"
-              }`}
-            >
-              <div className="flex items-start space-x-3 min-w-0 flex-1">
-                <div className="p-2 rounded-xl bg-white dark:bg-black/40 shrink-0 mt-0.5">
-                  {item.type === "alert" ? (
-                    <ShieldAlert className="w-4 h-4 text-red-500" />
-                  ) : item.type === "checkin" ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                  ) : (
-                    <Clock className="w-4 h-4 text-yellow-500" />
-                  )}
-                </div>
-
-                <div className="min-w-0 flex-1 space-y-0.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-bold truncate">{item.title}</p>
-                    <span className="text-[9px] text-zinc-400 font-mono shrink-0">
-                      {new Date(item.created_at).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
+        <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">
+          {notifications.map((item) => {
+            const presentation = TYPE_PRESENTATION[item.type] || TYPE_PRESENTATION.update;
+            const Icon = presentation.icon;
+            return (
+              <li key={item.id} className={`flex gap-3 py-4 ${item.is_read ? "opacity-75" : ""}`}>
+                <span className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-zinc-100 dark:bg-zinc-900 ${presentation.tone}`}>
+                  <Icon className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <h3 className="min-w-0 flex-1 text-sm font-bold text-zinc-950 dark:text-white">{item.title}</h3>
+                    {!item.is_read && <span className="h-2 w-2 rounded-full bg-sky-500" aria-label="Unread" />}
                   </div>
-                  <p className="text-[11px] text-zinc-600 dark:text-zinc-400 leading-snug">
-                    {item.message}
-                  </p>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+                    <span className={`font-bold ${presentation.tone}`}>{presentation.label}</span>
+                    <time className="text-zinc-500" dateTime={item.created_at}>{formatTimestamp(item.created_at)}</time>
+                  </div>
+                  <p className="mt-1.5 whitespace-pre-wrap wrap-break-word text-sm leading-5 text-zinc-600 dark:text-zinc-300">{item.message}</p>
+                  <div className="mt-2 flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => void handleReadToggle(item)}
+                      disabled={busyId === item.id}
+                      className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs font-semibold text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-950 disabled:opacity-50 dark:hover:bg-zinc-900 dark:hover:text-white"
+                      aria-label={item.is_read ? `Mark ${item.title} unread` : `Mark ${item.title} read`}
+                    >
+                      {item.is_read ? <Mail className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
+                      {item.is_read ? "Mark unread" : "Mark read"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleDelete(item.id)}
+                      disabled={busyId === item.id}
+                      className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs font-semibold text-zinc-500 transition-colors hover:bg-red-500/10 hover:text-red-600 disabled:opacity-50 dark:hover:text-red-400"
+                      aria-label={`Delete ${item.title}`}
+                    >
+                      {busyId === item.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                      Delete
+                    </button>
+                  </div>
                 </div>
-              </div>
-
-              {/* Individual Delete Action */}
-              <div className="flex items-center shrink-0">
-                {!item.is_read && (
-                  <button
-                    onClick={() => handleMarkRead(item.id)}
-                    className="p-1.5 text-zinc-400 hover:text-emerald-500 transition-colors rounded-lg active:scale-90"
-                    title="Mark as read"
-                    aria-label={`Mark ${item.title} as read`}
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                  </button>
-                )}
-                <button
-                  onClick={() => handleDeleteOne(item.id)}
-                  disabled={deletingId === item.id}
-                  className="p-1.5 text-zinc-400 hover:text-red-500 transition-colors rounded-lg active:scale-90"
-                  title="Delete Notification"
-                  aria-label={`Delete ${item.title}`}
-                >
-                  {deletingId === item.id ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Trash2 className="w-3.5 h-3.5" />
-                  )}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
-    </div>
+    </section>
   );
 }

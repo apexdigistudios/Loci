@@ -1,4 +1,26 @@
 import { normalizePhone } from "@/lib/utils";
+import { invokeNotificationApi } from "@/lib/notification-session";
+
+export type AlertType = "session_start" | "checkin" | "emergency" | "session_end" | "update" | "guardian_alert";
+
+export interface AlertRequest {
+  userIds: string | string[];
+  title: string;
+  message: string;
+  type?: AlertType;
+  url?: string;
+  sessionId?: string;
+  metadata?: Record<string, unknown>;
+  playFeedback?: boolean;
+  showLocal?: boolean;
+}
+
+interface DispatchResult {
+  localShown: boolean;
+  delivered: number;
+  notificationCount: number;
+  error?: string;
+}
 
 let alertAudioContext: AudioContext | null = null;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -6,134 +28,132 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function getAudioContext() {
   if (typeof window === "undefined") return null;
-  const AudioContextConstructor = window.AudioContext;
-  if (!AudioContextConstructor) return null;
-  alertAudioContext ??= new AudioContextConstructor();
+  const Context = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Context) return null;
+  alertAudioContext ??= new Context();
   return alertAudioContext;
 }
 
 export async function prepareAlertFeedback() {
-  const context = getAudioContext();
-  if (context?.state === "suspended") {
-    try {
+  try {
+    const context = getAudioContext();
+    if (context?.state === "suspended") {
       await context.resume();
-    } catch (error) {
-      console.warn("Could not prepare alert audio:", error);
     }
+  } catch (error) {
+    console.warn("Could not prepare alert audio:", error);
   }
 }
 
-export function triggerAlertFeedback() {
+export function triggerAlertFeedback(type: AlertType = "emergency") {
   if (typeof window === "undefined") return;
 
-  if ("vibrate" in navigator) {
-    navigator.vibrate([300, 100, 300, 100, 500]);
-  }
-
-  const context = getAudioContext();
-  if (!context) return;
-
+  const vibrationPattern = type === "checkin"
+    ? [100, 60, 100]
+    : type === "emergency" || type === "guardian_alert"
+    ? [400, 100, 400, 100, 800]
+    : [180, 80, 180];
   try {
-    if (context.state === "suspended") void context.resume();
-    const now = context.currentTime;
-    const notes = [880, 660, 880];
+    if (typeof navigator.vibrate === "function") navigator.vibrate(vibrationPattern);
 
-    notes.forEach((frequency, index) => {
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      const startAt = now + index * 0.16;
-      oscillator.type = "triangle";
-      oscillator.frequency.setValueAtTime(frequency, startAt);
-      gain.gain.setValueAtTime(0.0001, startAt);
-      gain.gain.exponentialRampToValueAtTime(0.22, startAt + 0.015);
-      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.13);
-      oscillator.connect(gain);
-      gain.connect(context.destination);
-      oscillator.start(startAt);
-      oscillator.stop(startAt + 0.14);
-    });
+    const context = getAudioContext();
+    if (!context) return;
+    void context.resume().then(() => {
+      const notes = type === "emergency" || type === "guardian_alert"
+        ? [880, 440, 880, 440]
+        : type === "checkin"
+        ? [660, 880]
+        : [740, 980];
+      const now = context.currentTime;
+      notes.forEach((frequency, index) => {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const startAt = now + index * 0.2;
+        oscillator.type = type === "emergency" || type === "guardian_alert" ? "sawtooth" : "triangle";
+        oscillator.frequency.setValueAtTime(frequency, startAt);
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.exponentialRampToValueAtTime(0.18, startAt + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.16);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(startAt);
+        oscillator.stop(startAt + 0.17);
+      });
+    }).catch((error) => console.warn("Could not play alert sound:", error));
   } catch (error) {
-    console.warn("Could not play alert sound:", error);
+    console.warn("Could not trigger device feedback:", error);
   }
 }
 
-function normalizeAlertTarget(target: string): string | null {
+function normalizeTarget(target: string) {
   const value = target.trim();
-  if (!value) return null;
   if (UUID_PATTERN.test(value)) return value;
   if (EMAIL_PATTERN.test(value)) return value.toLowerCase();
-
   const phone = normalizePhone(value);
   return /^\+\d{8,15}$/.test(phone) ? phone : null;
 }
 
-export function sendPushAlert(
-  userIds: string | string[],
-  title: string,
-  message: string,
-  url: string = "/"
-) {
-  if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-    const options: NotificationOptions = {
-      body: message,
-      icon: "/icon-192x192.png",
-      tag: "deloci-local-alert",
-      data: { url },
-    };
+async function showLocalNotification(title: string, message: string, url: string, type: AlertType) {
+  if (typeof window === "undefined" || !("Notification" in window) || Notification.permission !== "granted") return false;
+  const options: NotificationOptions = {
+    body: message,
+    icon: "/icon-192x192.png",
+    badge: "/badge-72x72.png",
+    tag: `deloci-${type}`,
+    data: { url },
+  };
 
+  try {
     if ("serviceWorker" in navigator) {
-      void navigator.serviceWorker.ready
-        .then((registration) => registration.showNotification(title, options))
-        .catch((error) => {
-          console.warn("Could not show service worker notification:", error);
-          try {
-            if (Notification.permission === "granted") new Notification(title, options);
-          } catch (fallbackError) {
-            console.warn("Could not show local alert notification:", fallbackError);
-          }
-        });
+      const registration = await navigator.serviceWorker.ready;
+      await registration.showNotification(title, options);
     } else {
-      try {
-        new Notification(title, options);
-      } catch (error) {
-        console.warn("Could not show local alert notification:", error);
-      }
+      new Notification(title, options);
     }
+    return true;
+  } catch (error) {
+    console.warn("Could not show local notification:", error);
+    return false;
   }
-
-  if (!userIds) return;
-  const rawTargets = Array.isArray(userIds) ? userIds : [userIds];
-  const targetIds = Array.from(new Set(rawTargets
-    .filter((target): target is string => typeof target === "string")
-    .map(normalizeAlertTarget)
-    .filter((target): target is string => target !== null)));
-  if (targetIds.length === 0) return;
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-key";
-  if (supabaseUrl === "https://placeholder.supabase.co" || anonKey === "placeholder-key") return;
-
-  void fetch(`${supabaseUrl}/functions/v1/send-push`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${anonKey}`,
-    },
-    body: JSON.stringify({
-      action: "send",
-      userIds: targetIds,
-      title,
-      body: message,
-      url,
-      tag: "deloci-safety-alert",
-    }),
-  })
-    .then((response) => {
-      if (!response.ok) {
-        void response.text().catch(() => "").then((body) => {
-          console.error("Push alert dispatch failed:", response.status, body);
-        });
-      }
-    })
-    .catch((error) => console.error("Failed to dispatch push alert:", error));
 }
+
+export async function dispatchAlert(request: AlertRequest): Promise<AlertDispatchResult> {
+  const type = request.type || "update";
+  const url = request.url || "/main?tab=notifications";
+  const targets = Array.from(new Set(
+    (Array.isArray(request.userIds) ? request.userIds : [request.userIds])
+      .filter((target): target is string => typeof target === "string")
+      .map(normalizeTarget)
+      .filter((target): target is string => target !== null)
+  ));
+
+  if (request.playFeedback !== false) triggerAlertFeedback(type);
+  const localPromise = request.showLocal === false
+    ? Promise.resolve(false)
+    : showLocalNotification(request.title, request.message, url, type);
+  const pushPromise = targets.length > 0
+    ? invokeNotificationApi<{ delivered: number; notificationCount: number }>({
+        action: "send",
+        userIds: targets,
+        title: request.title,
+        body: request.message,
+        type,
+        url,
+        tag: `deloci-${type}`,
+        metadata: { ...(request.metadata || {}), ...(request.sessionId ? { sessionId: request.sessionId } : {}) },
+      })
+    : Promise.resolve({ delivered: 0, notificationCount: 0 });
+
+  const [localResult, pushResult] = await Promise.allSettled([localPromise, pushPromise]);
+  const push = pushResult.status === "fulfilled" ? pushResult.value : null;
+  return {
+    localShown: localResult.status === "fulfilled" && localResult.value,
+    delivered: push?.delivered || 0,
+    notificationCount: push?.notificationCount || 0,
+    error: pushResult.status === "rejected"
+      ? (pushResult.reason instanceof Error ? pushResult.reason.message : "Push delivery failed")
+      : undefined,
+  };
+}
+
+export type AlertDispatchResult = DispatchResult;

@@ -27,6 +27,7 @@ import { MainApp } from "@/components/main-app";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { SplashScreen } from "@/components/splash-screen";
 import { supabase } from "@/lib/supabase";
+import { endNotificationSession } from "@/lib/notification-session";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -183,6 +184,7 @@ export default function Home() {
   };
 
   const handleLogout = () => {
+    void endNotificationSession();
     localStorage.removeItem("loci_user_phone");
     setUserPhone(null);
   };
