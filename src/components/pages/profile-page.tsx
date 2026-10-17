@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { supabase } from "@/lib/supabase";
+import { invokeNotificationApi } from "@/lib/notification-session";
 
 interface ProfilePageProps {
   fullName: string;
@@ -147,12 +148,7 @@ export function ProfilePage({
       const publicUrl = `${publicUrlData.publicUrl}?t=${Date.now()}`;
 
       // 5. Sync user database record
-      const { error: dbError } = await supabase
-        .from("users")
-        .update({ avatar_url: publicUrl })
-        .eq("phone", userPhone);
-
-      if (dbError) throw dbError;
+      await invokeNotificationApi({ action: "update_avatar", avatarUrl: publicUrl });
 
       setCurrentAvatar(publicUrl);
       if (onAvatarChange) onAvatarChange(publicUrl);

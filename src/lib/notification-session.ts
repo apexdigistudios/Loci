@@ -12,8 +12,8 @@ export async function createNotificationSession(
   userId: string,
   phone: string,
   pin: string
-): Promise<void> {
-  const { data, error } = await supabase.functions.invoke<SessionResponse>("send-push", {
+): Promise<PublicProfile> {
+  const { data, error } = await supabase.functions.invoke<SessionResponse & { user: PublicProfile }>("send-push", {
     body: { action: "create_session", userId, phone, pin },
   });
 
@@ -29,11 +29,12 @@ export async function createNotificationSession(
     }
     throw new Error(getFriendlyErrorMessage(error));
   }
-  if (!data?.token || !data.expiresAt) {
+  if (!data?.token || !data.expiresAt || !data.user?.id) {
     throw new Error("We couldn’t finish signing you in. Please try again.");
   }
 
   localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data));
+  return data.user;
 }
 
 export function getNotificationSessionToken(): string | null {
@@ -93,4 +94,78 @@ export async function getNotificationPinStatus(phone: string): Promise<boolean> 
   });
   if (error) throw new Error(getFriendlyErrorMessage(error, "We couldn’t check your account just now. Please try again."));
   return data?.hasPin === true;
+}
+
+export interface PublicProfile {
+  id: string;
+  phone: string;
+  full_name: string | null;
+  nickname: string | null;
+  avatar_url: string | null;
+  hasPin?: boolean;
+}
+
+export async function lookupProfileByPhone(phone: string): Promise<PublicProfile | null> {
+  const { data, error } = await supabase.functions.invoke<{ user: PublicProfile | null }>("send-push", {
+    body: { action: "lookup_user", phone },
+  });
+  if (error) throw new Error(getFriendlyErrorMessage(error, "We couldn’t check that number just now. Please try again."));
+  return data?.user || null;
+}
+
+export async function setAccountPin(phone: string, pin: string): Promise<void> {
+  const { data, error } = await supabase.functions.invoke<SessionResponse>("send-push", {
+    body: { action: "set_pin", phone, pin },
+  });
+  if (error) {
+    const response = (error as typeof error & { context?: Response }).context;
+    if (response instanceof Response) {
+      try {
+        const payload = await response.clone().json() as { error?: string };
+        if (payload.error) throw new Error(getFriendlyErrorMessage(payload.error));
+      } catch (responseError) {
+        if (responseError instanceof Error && responseError.message !== "Unexpected end of JSON input") throw responseError;
+      }
+    }
+    throw new Error(getFriendlyErrorMessage(error, "We couldn’t save your PIN just now. Please try again."));
+  }
+  if (!data?.token || !data.expiresAt) throw new Error("We couldn’t finish signing you in. Please try again.");
+  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data));
+}
+
+export async function createAccount(input: {
+  phone: string;
+  fullName: string;
+  nickname: string;
+  pin: string;
+  avatarUrl?: string;
+}): Promise<PublicProfile> {
+  const { data, error } = await supabase.functions.invoke<{ user: PublicProfile } & SessionResponse>("send-push", {
+    body: { action: "signup", ...input },
+  });
+  if (error) {
+    const response = (error as typeof error & { context?: Response }).context;
+    if (response instanceof Response) {
+      try {
+        const payload = await response.clone().json() as { error?: string };
+        if (payload.error) throw new Error(getFriendlyErrorMessage(payload.error));
+      } catch (responseError) {
+        if (responseError instanceof Error && responseError.message !== "Unexpected end of JSON input") throw responseError;
+      }
+    }
+    throw new Error(getFriendlyErrorMessage(error, "We couldn’t create your account just now. Please try again."));
+  }
+  if (!data?.user?.id || !data.token || !data.expiresAt) {
+    throw new Error("Your account may have been created, but we couldn’t finish signing you in. Please sign in.");
+  }
+  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ token: data.token, expiresAt: data.expiresAt }));
+  return data.user;
+}
+
+export async function lookupReferrer(code: string): Promise<{ full_name: string | null; nickname: string | null } | null> {
+  const { data, error } = await supabase.functions.invoke<{
+    referrer: { full_name: string | null; nickname: string | null } | null;
+  }>("send-push", { body: { action: "lookup_referrer", code } });
+  if (error) throw new Error(getFriendlyErrorMessage(error, "We couldn’t load this invitation just now."));
+  return data?.referrer || null;
 }

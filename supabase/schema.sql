@@ -1,5 +1,6 @@
 -- Loci database schema
 -- Safe to run repeatedly in the Supabase SQL editor.
+-- After this base schema, apply auth-rls-migration.sql to enable phone/PIN app-session RLS.
 
 create table if not exists public.users (
   id uuid primary key default gen_random_uuid(),

@@ -4,7 +4,7 @@ import React, { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Shield, ArrowRight, UserCheck } from "lucide-react";
 import Link from "next/link";
-import { supabase } from "@/lib/supabase";
+import { lookupReferrer } from "@/lib/notification-session";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 function JoinContent() {
@@ -23,17 +23,8 @@ function JoinContent() {
       }
 
       try {
-        const { data } = await supabase
-          .from("users")
-          .select("full_name, nickname")
-          .or(`phone.eq.${refCode},nickname.eq.${refCode}`)
-          .maybeSingle();
-
-        if (data) {
-          setReferrerName(data.nickname || data.full_name || refCode);
-        } else {
-          setReferrerName(refCode);
-        }
+        const referrer = await lookupReferrer(refCode);
+        setReferrerName(referrer?.nickname || referrer?.full_name || refCode);
       } catch (err) {
         console.error("Error fetching inviter info:", err);
         setReferrerName(refCode);

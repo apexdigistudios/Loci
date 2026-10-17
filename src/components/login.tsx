@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
+import Link from "next/link";
 import { User, UserCheck, Phone, Lock, ArrowRight, Loader2, LogIn, ImagePlus, KeyRound, ChevronLeft, ShieldCheck } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { normalizePhone, isValidPhone } from "@/lib/utils";
-import { createNotificationSession, getNotificationPinStatus } from "@/lib/notification-session";
+import { createAccount, createNotificationSession, lookupProfileByPhone, setAccountPin } from "@/lib/notification-session";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 import { SplashScreen } from "@/components/splash-screen";
 
@@ -49,23 +50,7 @@ interface AuthProfile {
   full_name: string | null;
   nickname: string | null;
   avatar_url: string | null;
-}
-
-const PIN_HASH_ITERATIONS = 310000;
-
-function bytesToHex(bytes: Uint8Array) {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function hashPin(pin: string) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
-  const derived = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: PIN_HASH_ITERATIONS, hash: "SHA-256" },
-    key,
-    256
-  );
-  return `pbkdf2$${PIN_HASH_ITERATIONS}$${bytesToHex(salt)}$${bytesToHex(new Uint8Array(derived))}`;
+  hasPin?: boolean;
 }
 
 export function Login({ onSuccess, showSplash = true }: LoginProps) {
@@ -142,29 +127,13 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     }
 
     const phoneFrameId = window.requestAnimationFrame(() => setPhone(phoneToVerify));
-    supabase
-      .from("users")
-      .select("id, phone, full_name, nickname, avatar_url")
-      .eq("phone", phoneToVerify)
-      .maybeSingle()
-      .then(({ data, error }) => {
+    void lookupProfileByPhone(phoneToVerify)
+      .then((data) => {
         if (cancelled) return;
-        if (error) {
-          console.error("Profile verification error:", error);
-          setErrorMessage("Could not verify saved profile. Enter your phone number.");
-          setProfileCheckComplete(true);
-          return;
-        }
         if (data) {
           setExistingProfile(data);
           setPhone(data.phone);
-          void getNotificationPinStatus(data.phone).then((hasPin) => {
-            if (cancelled) return;
-            setAuthStep(hasPin ? "pin" : "legacy-pin");
-            if (!hasPin) setErrorMessage("Set a security PIN to continue.");
-          }).catch(() => {
-            if (!cancelled) setErrorMessage("Could not check your PIN status. Please try again.");
-          });
+          setAuthStep(data.hasPin === false ? "legacy-pin" : "pin");
         } else {
           localStorage.removeItem("loci_user_profile");
           localStorage.removeItem("loci_saved_phone");
@@ -173,8 +142,12 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
           setErrorMessage("We couldn't find an account matching this number. Would you like to create a new account?");
         }
         setProfileCheckComplete(true);
-      }, () => {
-        if (!cancelled) setProfileCheckComplete(true);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        console.error("Saved profile lookup failed:", error);
+        setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t check your saved number. Enter it again or try later."));
+        setProfileCheckComplete(true);
       });
 
     const countryFrameId = window.requestAnimationFrame(() => {
@@ -260,17 +233,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     setLoading(true);
 
     try {
-      const { data, error } = await supabase
-        .from("users")
-        .select("id, phone, full_name, nickname, avatar_url")
-        .eq("phone", formattedPhone)
-        .maybeSingle();
-
-      if (error) {
-        setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t check that number just now. Please try again."));
-        setLoading(false);
-        return;
-      }
+      const data = await lookupProfileByPhone(formattedPhone);
 
       if (!data) {
         setExistingProfile(null);
@@ -286,8 +249,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
 
       setExistingProfile(data);
       setPhone(data.phone);
-      const hasPin = await getNotificationPinStatus(data.phone);
-      setAuthStep(hasPin ? "pin" : "legacy-pin");
+      setAuthStep(data.hasPin === false ? "legacy-pin" : "pin");
     } catch (error) {
       setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t sign you in just now. Check your connection and try again."));
     } finally {
@@ -304,17 +266,17 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     setErrorMessage(null);
 
     try {
-      await createNotificationSession(existingProfile.id, existingProfile.phone, loginPin);
+      const verifiedProfile = await createNotificationSession(existingProfile.id, existingProfile.phone, loginPin);
 
       const userData: UserData = {
-        fullName: existingProfile.full_name || "",
-        nickname: existingProfile.nickname || "",
-        phone: existingProfile.phone,
+        fullName: verifiedProfile.full_name || "",
+        nickname: verifiedProfile.nickname || "",
+        phone: verifiedProfile.phone,
       };
 
       if (typeof window !== "undefined") {
         localStorage.setItem("loci_user_profile", JSON.stringify(userData));
-        localStorage.setItem("loci_saved_phone", existingProfile.phone);
+        localStorage.setItem("loci_saved_phone", verifiedProfile.phone);
       }
 
       onSuccess(userData);
@@ -343,15 +305,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     setErrorMessage(null);
 
     try {
-      const pinHash = await hashPin(pin);
-      const { error } = await supabase
-        .from("users")
-        .update({ pin_hash: pinHash })
-        .eq("phone", existingProfile.phone);
-
-      if (error) throw error;
-
-      await createNotificationSession(existingProfile.id, existingProfile.phone, pin);
+      await setAccountPin(existingProfile.phone, pin);
 
       const userData: UserData = {
         fullName: existingProfile.full_name || "",
@@ -401,24 +355,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     setLoading(true);
 
     try {
-      const { data: existingUser } = await supabase
-        .from("users")
-        .select("id, phone, full_name, nickname, avatar_url")
-        .eq("phone", formattedPhone)
-        .maybeSingle();
-
-      if (existingUser) {
-        setPhone(existingUser.phone);
-        setIsSignUp(false);
-        setExistingProfile(existingUser);
-        setAuthStep("pin");
-        setLoginPin("");
-        setErrorMessage("An account with this phone already exists. Please log in.");
-        setLoading(false);
-        return;
-      }
-
-      let avatarUrl = "";
+      let avatarBlob: Blob | null = null;
       const bitmap = await createImageBitmap(avatarFile);
       const canvas = document.createElement("canvas");
       canvas.width = 300;
@@ -433,32 +370,35 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       }
       bitmap.close();
 
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
-      if (!blob) throw new Error("Avatar processing failed.");
+      avatarBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
 
-      const fileName = `${formattedPhone.replace(/[^a-zA-Z0-9]/g, "")}_${Date.now()}.jpg`;
-      const { error: uploadError } = await supabase.storage.from("avatars").upload(fileName, blob, { contentType: "image/jpeg" });
-      if (uploadError) throw uploadError;
+      const savedProfile = await createAccount({
+        fullName: trimmedFullName,
+        nickname: trimmedNickname,
+        phone: formattedPhone,
+        pin,
+      });
 
-      const { data: publicUrlData } = supabase.storage.from("avatars").getPublicUrl(fileName);
-      avatarUrl = publicUrlData.publicUrl;
-
-      const pinHash = await hashPin(pin);
-
-      const { data: savedProfile, error: dbError } = await supabase.from("users").upsert(
-        {
-          full_name: trimmedFullName,
-          nickname: trimmedNickname,
-          phone: formattedPhone,
-          avatar_url: avatarUrl,
-          pin_hash: pinHash,
-        },
-        { onConflict: "phone" }
-      ).select("id").single();
-
-      if (dbError) throw dbError;
-      if (!savedProfile) throw new Error("Could not load the new profile.");
-      await createNotificationSession(savedProfile.id, formattedPhone, pin);
+      if (avatarBlob) {
+        const fileName = `${formattedPhone.replace(/[^a-zA-Z0-9]/g, "")}.jpg`;
+        const { error: uploadError } = await supabase.storage.from("avatars").upload(fileName, avatarBlob, {
+          upsert: true,
+          contentType: "image/jpeg",
+          cacheControl: "3600",
+        });
+        if (uploadError) {
+          console.warn("Account created, but profile photo could not be uploaded:", uploadError);
+        } else {
+          const { data: publicUrlData } = supabase.storage.from("avatars").getPublicUrl(fileName);
+          const avatarUrl = publicUrlData.publicUrl;
+          const { error: profileUpdateError } = await supabase
+            .from("users")
+            .update({ avatar_url: avatarUrl })
+            .eq("id", savedProfile.id);
+          if (profileUpdateError) console.warn("Account created, but profile photo could not be saved:", profileUpdateError);
+          else savedProfile.avatar_url = avatarUrl;
+        }
+      }
 
       if (typeof window !== "undefined") {
         const referrerNickname = localStorage.getItem("loci_referrer_nickname");
@@ -476,14 +416,14 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       }
 
       const userData: UserData = {
-        fullName: trimmedFullName,
-        nickname: trimmedNickname,
-        phone: formattedPhone,
+        fullName: savedProfile.full_name || trimmedFullName,
+        nickname: savedProfile.nickname || trimmedNickname,
+        phone: savedProfile.phone,
       };
 
       if (typeof window !== "undefined") {
         localStorage.setItem("loci_user_profile", JSON.stringify(userData));
-        localStorage.setItem("loci_saved_phone", formattedPhone);
+        localStorage.setItem("loci_saved_phone", savedProfile.phone);
       }
 
       onSuccess(userData);
@@ -682,6 +622,9 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
           {errorMessage && (
             <div role="alert" className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
               {errorMessage}
+              {errorMessage.includes("verify that you own this phone") && (
+                <Link href="/contact" className="mt-2 block font-bold underline underline-offset-2">Contact support</Link>
+              )}
             </div>
           )}
           <div className="flex flex-col items-center gap-3 py-3">

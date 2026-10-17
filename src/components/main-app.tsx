@@ -654,12 +654,6 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     if (!contactName || !/^\+\d{7,15}$/.test(contactPhone)) return false;
 
     setAddingContact(true);
-    const { data: matchedUser } = await supabase
-      .from("users")
-      .select("phone, avatar_url")
-      .eq("phone", contactPhone)
-      .maybeSingle();
-
     const { data, error } = await supabase
       .from("trusted_contacts")
       .insert({
@@ -674,6 +668,11 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     setAddingContact(false);
 
     if (!error && data) {
+      const { data: matchedUser } = await supabase
+        .from("users")
+        .select("phone, avatar_url")
+        .eq("phone", contactPhone)
+        .maybeSingle();
       const newContact: Contact = {
         ...data,
         isLociUser: !!matchedUser,

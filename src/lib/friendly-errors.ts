@@ -13,6 +13,9 @@ export function getFriendlyErrorMessage(error: unknown, fallback = DEFAULT_MESSA
   if (/notification session expired|session expired|sign in again/.test(message)) {
     return "Your sign-in has expired. Please sign in again to continue.";
   }
+  if (/verified recovery|verify that you own this phone|contact support/.test(message)) {
+    return "For your security, we need to verify that you own this phone before setting a PIN. Please contact our support team for account recovery.";
+  }
   if (/network|fetch failed|failed to fetch|offline|timeout|timed out|connection/.test(message)) {
     return "We couldn’t connect just now. Check your connection and try again.";
   }

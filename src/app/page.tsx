@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { Capacitor } from "@capacitor/core";
 import {
@@ -26,8 +26,7 @@ import { Login, UserData } from "@/components/login";
 import { MainApp } from "@/components/main-app";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { SplashScreen } from "@/components/splash-screen";
-import { supabase } from "@/lib/supabase";
-import { endNotificationSession } from "@/lib/notification-session";
+import { endNotificationSession, lookupReferrer } from "@/lib/notification-session";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -104,9 +103,10 @@ export default function Home() {
 
   useEffect(() => {
     const savedPhone = localStorage.getItem("loci_user_phone");
-    if (savedPhone) {
-      setUserPhone(savedPhone);
-    }
+    const savedPhoneFrameId = savedPhone
+      ? window.requestAnimationFrame(() => setUserPhone(savedPhone))
+      : null;
+    let referralToastFrameId: number | null = null;
 
     // Check for ?signup=true and referral code
     if (typeof window !== "undefined") {
@@ -115,20 +115,11 @@ export default function Home() {
       const refCode = localStorage.getItem("loci_referral_code");
 
       if (isSignup && refCode) {
-        setShowReferralToast(true);
+        referralToastFrameId = window.requestAnimationFrame(() => setShowReferralToast(true));
         // Fetch referrer name
-        supabase
-          .from("users")
-          .select("full_name, nickname")
-          .or(`phone.eq.${refCode},nickname.eq.${refCode}`)
-          .maybeSingle()
-          .then(({ data }) => {
-            if (data) {
-              setToastReferrerName(data.nickname || data.full_name || refCode);
-            } else {
-              setToastReferrerName(refCode);
-            }
-          });
+        void lookupReferrer(refCode)
+          .then((referrer) => setToastReferrerName(referrer?.nickname || referrer?.full_name || refCode))
+          .catch(() => setToastReferrerName(refCode));
       }
     }
 
@@ -138,7 +129,7 @@ export default function Home() {
       window.matchMedia("(display-mode: standalone)").matches ||
       (navigator as unknown as { standalone?: boolean }).standalone === true;
 
-    setIsPWA(isStandalone);
+    const pwaFrameId = window.requestAnimationFrame(() => setIsPWA(isStandalone));
 
     if (isStandalone) {
       const splashTimer = window.setTimeout(() => setSplashComplete(true), 1700);
@@ -150,6 +141,9 @@ export default function Home() {
       return () => {
         window.clearTimeout(splashTimer);
         window.removeEventListener("beforeinstallprompt", handleInstallWhileStarting);
+        if (savedPhoneFrameId !== null) window.cancelAnimationFrame(savedPhoneFrameId);
+        if (referralToastFrameId !== null) window.cancelAnimationFrame(referralToastFrameId);
+        window.cancelAnimationFrame(pwaFrameId);
       };
     }
 
@@ -159,7 +153,12 @@ export default function Home() {
     };
 
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
-    return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      if (savedPhoneFrameId !== null) window.cancelAnimationFrame(savedPhoneFrameId);
+      if (referralToastFrameId !== null) window.cancelAnimationFrame(referralToastFrameId);
+      window.cancelAnimationFrame(pwaFrameId);
+    };
   }, []);
 
   if (isPWA === null || (isPWA && !splashComplete)) {
