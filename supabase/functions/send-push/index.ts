@@ -25,6 +25,23 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
 }
 
+function isUniqueViolation(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; message?: unknown; details?: unknown };
+  return candidate.code === "23505" || /duplicate key|unique constraint/i.test(
+    `${String(candidate.message || "")} ${String(candidate.details || "")}`
+  );
+}
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message) return message;
+  }
+  return typeof error === "string" && error ? error : "Server error occurred";
+}
+
 function normalizePhone(value: string) {
   const digits = value.trim().replace(/\D/g, "");
   return digits ? `+${digits}` : "";
@@ -140,17 +157,30 @@ async function publishNotificationChange(admin: ReturnType<typeof createClient>,
 }
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
-
+  let action = "";
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-    if (!supabaseUrl || !serviceRoleKey) return jsonResponse({ error: "Notification service is not configured" }, 500);
+    if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+    if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")?.trim() || "";
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim() || "";
+    if (!supabaseUrl || !serviceRoleKey) {
+      console.error("Edge function configuration error: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+      return jsonResponse({ error: "Server configuration error: missing service keys" }, 500);
+    }
 
     const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
-    const body = await req.json();
-    const action = typeof body.action === "string" ? body.action : "";
+    let body: Record<string, unknown>;
+    try {
+      const parsedBody: unknown = await req.json();
+      if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
+        return jsonResponse({ error: "Invalid request body" }, 400);
+      }
+      body = parsedBody as Record<string, unknown>;
+    } catch {
+      return jsonResponse({ error: "Invalid request body" }, 400);
+    }
+    action = typeof body.action === "string" ? body.action : "";
 
     if (action === "check_pin_status") {
       const phone = normalizePhone(String(body.phone || ""));
@@ -185,13 +215,17 @@ serve(async (req) => {
     }
 
     if (action === "signup") {
-      const phone = normalizePhone(String(body.phone || ""));
+      const rawPhone = typeof body.phone === "string" ? body.phone : "";
+      const phone = normalizePhone(rawPhone);
       const fullName = typeof body.fullName === "string" ? body.fullName.trim().slice(0, 120) : "";
       const nickname = typeof body.nickname === "string" ? body.nickname.trim().slice(0, 60) : "";
       const avatarUrl = typeof body.avatarUrl === "string" ? body.avatarUrl.trim() : "";
-      const pin = String(body.pin || "");
-      if (!/^\+\d{8,15}$/.test(phone) || !fullName || !nickname || !/^\d{4}$/.test(pin)) {
-        return jsonResponse({ error: "Please check the name, phone number, and four-digit PIN." }, 400);
+      const pin = typeof body.pin === "string" ? body.pin : "";
+      if (!/^\+\d{8,15}$/.test(phone) || !/^\d{4}$/.test(pin)) {
+        return jsonResponse({ error: "Please enter a valid phone number and four-digit PIN." }, 400);
+      }
+      if (!fullName || !nickname) {
+        return jsonResponse({ error: "Please enter your name and nickname to create an account." }, 400);
       }
       if (avatarUrl) {
         try {
@@ -207,7 +241,9 @@ serve(async (req) => {
         .eq("phone", phone)
         .maybeSingle();
       if (existingError) return jsonResponse({ error: "We couldn’t check that number. Please try again." }, 500);
-      if (existingUser) return jsonResponse({ error: "An account with this number already exists." }, 409);
+      if (existingUser) {
+        return jsonResponse({ error: "An account with this phone number already exists." }, 409);
+      }
 
       const { data: user, error: signupError } = await admin.from("users").insert({
         phone,
@@ -217,21 +253,18 @@ serve(async (req) => {
         pin_hash: await hashPin(pin),
       }).select("id, phone, full_name, nickname, avatar_url").single();
       if (signupError || !user) {
-        if (signupError?.code === "23505") return jsonResponse({ error: "An account with this number already exists." }, 409);
+        if (isUniqueViolation(signupError)) {
+          return jsonResponse({ error: "An account with this phone number already exists." }, 409);
+        }
         console.error("Profile signup failed:", signupError);
         return jsonResponse({ error: "We couldn’t create your account just now. Please try again." }, 500);
       }
 
-      try {
-        const session = await issueSession(admin, user.id);
-        return jsonResponse({ user, ...session }, 201);
-      } catch (error) {
-        console.error("Profile created but app session could not be issued:", error);
-        return jsonResponse({ error: "Your account was created, but we couldn’t finish signing you in. Please sign in." }, 500);
-      }
+      const session = await issueSession(admin, user.id);
+      return jsonResponse({ user, ...session }, 201);
     }
 
-    if (action === "create_session") {
+    if (action === "login" || action === "create_session") {
       const userId = String(body.userId || "").trim();
       const phone = normalizePhone(String(body.phone || ""));
       const pin = String(body.pin || "");
@@ -511,7 +544,12 @@ serve(async (req) => {
       failures: results.filter((result) => result.status === "rejected").length,
     });
   } catch (error) {
-    console.error("Notification request failed:", error);
-    return jsonResponse({ error: "Notification request failed" }, 500);
+    console.error("Edge function error:", error);
+    if (action === "signup" && isUniqueViolation(error)) {
+      return jsonResponse({ error: "An account with this phone number already exists." }, 409);
+    }
+    const message = errorMessage(error);
+    const status = /invalid|missing|required|must be|please enter/i.test(message) ? 400 : 500;
+    return jsonResponse({ error: message }, status);
   }
 });

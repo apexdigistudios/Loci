@@ -13,8 +13,8 @@ export async function createNotificationSession(
   phone: string,
   pin: string
 ): Promise<PublicProfile> {
-  const { data, error } = await supabase.functions.invoke<SessionResponse & { user: PublicProfile }>("send-push", {
-    body: { action: "create_session", userId, phone, pin },
+  const { data, error } = await supabase.functions.invoke<SessionResponse & { user: PublicProfile }>("deloci-auth", {
+    body: { action: "login", userId, phone, pin },
   });
 
   if (error) {
@@ -89,7 +89,7 @@ export async function endNotificationSession(): Promise<void> {
 }
 
 export async function getNotificationPinStatus(phone: string): Promise<boolean> {
-  const { data, error } = await supabase.functions.invoke<{ hasPin: boolean }>("send-push", {
+  const { data, error } = await supabase.functions.invoke<{ hasPin: boolean }>("deloci-auth", {
     body: { action: "check_pin_status", phone },
   });
   if (error) throw new Error(getFriendlyErrorMessage(error, "We couldn’t check your account just now. Please try again."));
@@ -106,7 +106,7 @@ export interface PublicProfile {
 }
 
 export async function lookupProfileByPhone(phone: string): Promise<PublicProfile | null> {
-  const { data, error } = await supabase.functions.invoke<{ user: PublicProfile | null }>("send-push", {
+  const { data, error } = await supabase.functions.invoke<{ user: PublicProfile | null }>("deloci-auth", {
     body: { action: "lookup_user", phone },
   });
   if (error) throw new Error(getFriendlyErrorMessage(error, "We couldn’t check that number just now. Please try again."));
@@ -114,7 +114,7 @@ export async function lookupProfileByPhone(phone: string): Promise<PublicProfile
 }
 
 export async function setAccountPin(phone: string, pin: string): Promise<void> {
-  const { data, error } = await supabase.functions.invoke<SessionResponse>("send-push", {
+  const { data, error } = await supabase.functions.invoke<SessionResponse>("deloci-auth", {
     body: { action: "set_pin", phone, pin },
   });
   if (error) {
@@ -140,7 +140,7 @@ export async function createAccount(input: {
   pin: string;
   avatarUrl?: string;
 }): Promise<PublicProfile> {
-  const { data, error } = await supabase.functions.invoke<{ user: PublicProfile } & SessionResponse>("send-push", {
+  const { data, error } = await supabase.functions.invoke<{ user: PublicProfile } & SessionResponse>("deloci-auth", {
     body: { action: "signup", ...input },
   });
   if (error) {
@@ -165,7 +165,7 @@ export async function createAccount(input: {
 export async function lookupReferrer(code: string): Promise<{ full_name: string | null; nickname: string | null } | null> {
   const { data, error } = await supabase.functions.invoke<{
     referrer: { full_name: string | null; nickname: string | null } | null;
-  }>("send-push", { body: { action: "lookup_referrer", code } });
+  }>("deloci-auth", { body: { action: "lookup_referrer", code } });
   if (error) throw new Error(getFriendlyErrorMessage(error, "We couldn’t load this invitation just now."));
   return data?.referrer || null;
 }
