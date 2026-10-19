@@ -95,20 +95,29 @@ Deno.serve(async (req) => {
     }
     action = typeof body.action === "string" ? body.action : "";
 
-    const authHeader = req.headers.get("Authorization");
+    // Robust case-insensitive header check for Bearer token
+    const authHeader = req.headers.get("Authorization") || req.headers.get("authorization");
     const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
     if (!token || token === authHeader) {
-      return jsonResponse({ error: "Unauthorized" }, 401);
+      console.warn("Missing or malformed Authorization header:", authHeader);
+      return jsonResponse({ error: "Unauthorized: Missing token" }, 401);
     }
 
     const { data: { user }, error: authError } = await admin.auth.getUser(token);
-    if (authError || !user) return jsonResponse({ error: "Unauthorized" }, 401);
+    if (authError || !user) {
+      console.warn("Supabase auth.getUser failed:", { authError, tokenPreview: token.slice(0, 10) + "..." });
+      return jsonResponse({ error: "Unauthorized: Invalid session" }, 401);
+    }
+
     const { data: sender, error: senderError } = await admin
       .from("users")
       .select("id, phone")
       .eq("id", user.id)
       .maybeSingle();
-    if (senderError || !sender) return jsonResponse({ error: "Notification profile not found" }, 401);
+    if (senderError || !sender) {
+      console.warn("Notification profile not found for user ID:", user.id);
+      return jsonResponse({ error: "Notification profile not found" }, 401);
+    }
 
     if (action === "update_avatar") {
       const avatarUrl = typeof body.avatarUrl === "string" ? body.avatarUrl.trim() : "";
