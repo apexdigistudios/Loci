@@ -12,10 +12,7 @@ interface SharePageProps {
 interface ReferredUser {
   referred_phone: string;
   created_at: string;
-  users: Array<{
-    nickname: string | null;
-    full_name: string | null;
-  }>;
+  nickname: string | null;
 }
 
 export function SharePage({ nickname, userPhone }: SharePageProps) {
@@ -56,7 +53,7 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
 
         const { data, error } = await supabase
           .from("referrals")
-          .select("created_at, referred_phone, users!referrals_referred_phone_fkey(nickname, full_name)")
+          .select("created_at, referred_phone, nickname")
           .eq("referrer_phone", profile.phone)
           .order("created_at", { ascending: false });
 
@@ -89,7 +86,6 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
 
   return (
     <div className="space-y-6 pt-2 max-w-md mx-auto font-sans">
-      {/* Header */}
       <div>
         <h2 className="text-lg font-bold text-black dark:text-white">
           Invite Safety Contacts
@@ -99,7 +95,6 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
         </p>
       </div>
 
-      {/* Invite Link Box */}
       <div className="bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 space-y-3">
         <label className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider block">
           Your Personal Link
@@ -121,7 +116,6 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
         </div>
       </div>
 
-      {/* Quick Messaging Options */}
       <div className="grid grid-cols-2 gap-3">
         <a
           href={`https://wa.me/?text=${encodeURIComponent(`${shareText}${shareUrl}`)}`}
@@ -142,7 +136,6 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
         </a>
       </div>
 
-      {/* Connected Members */}
       <div className="pt-2 space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
@@ -167,24 +160,28 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
           </div>
         ) : (
           <div className="space-y-2">
-            {referrals.map((item) => (
-              <div
-                key={item.referred_phone}
-                className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 flex items-center justify-between text-xs"
-              >
-                <div>
-                  <p className="font-semibold text-black dark:text-white">
-                    {item.users[0]?.nickname || item.users[0]?.full_name || "Déloci member"}
-                  </p>
-                  <p className="text-[10px] text-zinc-400 mt-0.5">
-                    Joined {new Date(item.created_at).toLocaleDateString()}
-                  </p>
+            {referrals.map((item, index) => {
+              const displayName = item.nickname || item.referred_phone;
+
+              return (
+                <div
+                  key={item.referred_phone || index}
+                  className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 flex items-center justify-between text-xs"
+                >
+                  <div>
+                    <p className="font-semibold text-black dark:text-white">
+                      {displayName}
+                    </p>
+                    <p className="text-[10px] text-zinc-400 mt-0.5">
+                      Joined {new Date(item.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+                    Connected
+                  </span>
                 </div>
-                <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
-                  Connected
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

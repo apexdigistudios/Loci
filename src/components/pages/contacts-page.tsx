@@ -13,6 +13,8 @@ import {
   Image as ImageIcon,
   Shield,
   UserCheck,
+  LayoutGrid,
+  Contact as ContactIcon,
 } from "lucide-react";
 import { SharedSessionsPage } from "./shared-sessions-page";
 
@@ -28,7 +30,7 @@ export interface Contact {
   contact_user_id?: string;
   name: string;
   phone: string;
-  group_category?: string;
+  group_category?: string | null;
   isLociUser?: boolean;
   avatar_url?: string;
 }
@@ -246,7 +248,7 @@ export function ContactsPage({
 
   const activeGroupData = allGroups.find((g) => g.key === activeGroupView);
   const groupContacts = contacts.filter(
-    (c) => (c.group_category || "Emergency Circle") === activeGroupView
+    (c) => c.group_category === activeGroupView
   );
 
   return (
@@ -284,7 +286,8 @@ export function ContactsPage({
       {/* SUBVIEW 1: MY CIRCLE */}
       {subTab === "contacts" && (
         <>
-          <div role="tablist" aria-label="Circle view" className="grid grid-cols-2 gap-1 rounded-xl border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-900">
+          {/* Liquid Icon Buttons Switcher */}
+          <div role="tablist" aria-label="Circle view" className="flex items-center justify-center space-x-3 p-1.5 bg-zinc-200/60 dark:bg-zinc-900/80 rounded-2xl border border-zinc-300/40 dark:border-zinc-800 max-w-xs mx-auto">
             <button
               type="button"
               role="tab"
@@ -293,9 +296,15 @@ export function ContactsPage({
                 setCircleView("groups");
                 setActiveGroupView(null);
               }}
-              className={`min-h-10 rounded-lg px-3 text-xs font-bold transition-colors ${circleView === "groups" ? "bg-white text-zinc-950 shadow-sm dark:bg-zinc-800 dark:text-white" : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white"}`}
+              className={`flex-1 min-h-11 rounded-xl px-4 text-xs font-black transition-all flex items-center justify-center space-x-2 ${
+                circleView === "groups"
+                  ? "bg-white dark:bg-zinc-800 text-black dark:text-white shadow-md scale-105"
+                  : "text-zinc-400 hover:text-black dark:hover:text-white"
+              }`}
+              title="Groups View"
             >
-              Groups
+              <LayoutGrid className="w-4 h-4 text-yellow-500" />
+              <span>Groups</span>
             </button>
             <button
               type="button"
@@ -305,9 +314,15 @@ export function ContactsPage({
                 setCircleView("contacts");
                 setActiveGroupView(null);
               }}
-              className={`min-h-10 rounded-lg px-3 text-xs font-bold transition-colors ${circleView === "contacts" ? "bg-white text-zinc-950 shadow-sm dark:bg-zinc-800 dark:text-white" : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white"}`}
+              className={`flex-1 min-h-11 rounded-xl px-4 text-xs font-black transition-all flex items-center justify-center space-x-2 ${
+                circleView === "contacts"
+                  ? "bg-white dark:bg-zinc-800 text-black dark:text-white shadow-md scale-105"
+                  : "text-zinc-400 hover:text-black dark:hover:text-white"
+              }`}
+              title="Contacts View"
             >
-              Contacts ({contacts.length})
+              <ContactIcon className="w-4 h-4 text-yellow-500" />
+              <span>Contacts ({contacts.length})</span>
             </button>
           </div>
 
@@ -345,7 +360,7 @@ export function ContactsPage({
                         <div className="min-w-0">
                           <p className="truncate text-xs font-extrabold text-zinc-950 dark:text-white">{contact.name}</p>
                           <p className="truncate font-mono text-[11px] text-zinc-400">{contact.phone}</p>
-                          <p className="text-[10px] text-zinc-500">{contact.group_category || "Emergency Circle"}</p>
+                          <p className="text-[10px] text-zinc-500">{contact.group_category || "Direct Contact"}</p>
                         </div>
                       </div>
                       <button
@@ -503,7 +518,7 @@ export function ContactsPage({
               <div className="grid grid-cols-2 gap-3">
                 {allGroups.map((grp, idx) => {
                   const count = contacts.filter(
-                    (c) => (c.group_category || "Emergency Circle") === grp.key
+                    (c) => c.group_category === grp.key
                   ).length;
 
                   const isWide = idx === 0;
