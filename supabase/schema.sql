@@ -106,7 +106,7 @@ create index if not exists notifications_user_id_created_at_idx
 create table if not exists public.user_push_subscriptions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
-  endpoint text not null unique,
+  endpoint text not null,
   p256dh text not null,
   auth text not null,
   device_info jsonb not null default '{}'::jsonb,
@@ -114,6 +114,9 @@ create table if not exists public.user_push_subscriptions (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+create unique index if not exists user_push_subscriptions_user_endpoint_key
+  on public.user_push_subscriptions(user_id, endpoint);
 
 drop index if exists public.user_push_subscriptions_user_phone_idx;
 
@@ -126,6 +129,12 @@ alter table public.user_push_subscriptions
   add column if not exists is_active boolean not null default true,
   add column if not exists updated_at timestamptz not null default now(),
   alter column user_id set not null;
+
+alter table public.user_push_subscriptions
+  drop constraint if exists user_push_subscriptions_endpoint_key;
+
+create unique index if not exists user_push_subscriptions_user_endpoint_key
+  on public.user_push_subscriptions(user_id, endpoint);
 
 alter table public.notifications enable row level security;
 alter table public.user_push_subscriptions enable row level security;

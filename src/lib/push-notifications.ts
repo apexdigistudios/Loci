@@ -1,3 +1,4 @@
+import { supabase } from "@/lib/supabase";
 import { invokeNotificationApi } from "@/lib/notification-api";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 
@@ -67,22 +68,26 @@ export async function subscribeUserToPush(userId: string) {
       return { ok: false, reason: "We couldn’t enable notifications on this device. Please try again." };
     }
 
-    const subJson = subscription.toJSON();
-    if (!subJson.endpoint || !subJson.keys?.p256dh || !subJson.keys?.auth) {
+      const p256dh = subscription.getKey("p256dh");
+      const auth = subscription.getKey("auth");
+      if (!subscription.endpoint || !p256dh || !auth) {
       return { ok: false, reason: "We couldn’t enable notifications on this device. Please try again." };
     }
 
-    await invokeNotificationApi({
-      action: "subscribe",
-      endpoint: subJson.endpoint,
-      p256dh: subJson.keys.p256dh,
-      auth: subJson.keys.auth,
-      deviceInfo: {
-        userAgent: navigator.userAgent,
-        language: navigator.language,
-        platform: navigator.platform,
-      },
-    });
+      const { error } = await supabase.from("user_push_subscriptions").upsert({
+        user_id: userId,
+        endpoint: subscription.endpoint,
+        p256dh: arrayBufferToBase64(p256dh),
+        auth: arrayBufferToBase64(auth),
+        device_info: {
+          userAgent: navigator.userAgent,
+          language: navigator.language,
+          platform: navigator.platform,
+        },
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "user_id,endpoint" });
+      if (error) throw error;
 
     return { ok: true, subscription };
   } catch (err: unknown) {
@@ -91,6 +96,14 @@ export async function subscribeUserToPush(userId: string) {
   }
 }
 
+  function arrayBufferToBase64(buffer: ArrayBuffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    for (let index = 0; index < bytes.length; index += 1) {
+      binary += String.fromCharCode(bytes[index]);
+    }
+    return window.btoa(binary);
+  }
 export async function sendPushTestNotification(userId: string) {
   try {
     if (!userId) return { ok: false, reason: "Your profile is still loading. Please try again in a moment." };
