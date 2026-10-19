@@ -7,8 +7,8 @@ self.addEventListener('install', (event) => {
     await Promise.all(STATIC_ASSETS.map(async (asset) => {
       try {
         await cache.add(asset);
-      } catch (error) {
-        console.warn('[ServiceWorker] Skipped caching asset:', asset, error);
+      } catch {
+        console.warn('[ServiceWorker] Skipped caching asset:', asset);
       }
     }));
     await self.skipWaiting();
@@ -29,7 +29,7 @@ self.addEventListener('fetch', (event) => {
   event.respondWith((async () => {
     try {
       return await fetch(event.request);
-    } catch (error) {
+    } catch {
       try {
         const cached = await caches.match(event.request);
         if (cached) return cached;
@@ -37,8 +37,8 @@ self.addEventListener('fetch', (event) => {
           const home = await caches.match('/');
           if (home) return home;
         }
-      } catch (cacheError) {
-        console.warn('[ServiceWorker] Cache fallback failed:', cacheError);
+      } catch {
+        console.warn('[ServiceWorker] Cache fallback failed');
       }
       return new Response('Offline', {
         status: 503,
@@ -61,8 +61,8 @@ self.addEventListener('push', (event) => {
           payload = { body: raw };
         }
       }
-    } catch (error) {
-      console.warn('[ServiceWorker] Could not read push payload:', error);
+    } catch {
+      console.warn('[ServiceWorker] Could not read push payload');
     }
 
     const type = typeof payload.type === 'string' ? payload.type : 'update';

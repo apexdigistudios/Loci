@@ -1,22 +1,18 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Login, UserData } from "@/components/login";
 import { MainApp } from "@/components/main-app";
 import { SplashScreen } from "@/components/splash-screen";
 import { endNotificationSession } from "@/lib/notification-session";
 
 export default function MainPage() {
-  const [userPhone, setUserPhone] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [userPhone, setUserPhone] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem("loci_user_phone");
+  });
 
-  useEffect(() => {
-    const savedPhone = localStorage.getItem("loci_user_phone");
-    if (savedPhone) {
-      setUserPhone(savedPhone);
-    }
-    setLoading(false);
-  }, []);
+  const loading = false;
 
   const handleLoginSuccess = (data: UserData) => {
     localStorage.setItem("loci_user_phone", data.phone);

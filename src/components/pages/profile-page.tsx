@@ -46,7 +46,6 @@ export function ProfilePage({
   onAvatarChange,
   notificationPermission,
   locationStatus,
-  locationCoords,
   triggerNotificationPrompt,
   triggerLocationPrompt,
   onTestPush,

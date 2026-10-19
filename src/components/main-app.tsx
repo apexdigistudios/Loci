@@ -288,7 +288,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
             if (parsed.status === "active") {
               setActiveSession(parsed);
             }
-          } catch (e) {
+          } catch {
             localStorage.removeItem("loci_active_session");
           }
         }

@@ -5,7 +5,6 @@ import {
   Radio,
   Loader2,
   Clock,
-  ShieldAlert,
   Phone,
   ChevronRight,
   ChevronLeft,
@@ -15,8 +14,6 @@ import {
   Navigation,
   Plus,
   ExternalLink,
-  CheckCircle2,
-  XCircle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { SatelliteMap } from "../ui/satellite-map";

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { X, Share, PlusSquare, CheckCircle2, Smartphone, Monitor, Download } from "lucide-react";
 
 interface InstallModalProps {
@@ -9,12 +9,11 @@ interface InstallModalProps {
 }
 
 export function InstallModal({ isOpen, onClose }: InstallModalProps) {
-  const [isIOS, setIsIOS] = useState(false);
-
-  useEffect(() => {
+  const [isIOS] = useState(() => {
+    if (typeof window === "undefined") return false;
     const userAgent = window.navigator.userAgent.toLowerCase();
-    setIsIOS(/iphone|ipad|ipod/.test(userAgent));
-  }, []);
+    return /iphone|ipad|ipod/.test(userAgent);
+  });
 
   if (!isOpen) return null;
 
@@ -74,7 +73,7 @@ export function InstallModal({ isOpen, onClose }: InstallModalProps) {
                   <div className="p-2 bg-yellow-400 text-black rounded-xl shrink-0 font-extrabold text-xs">2</div>
                   <div className="space-y-0.5">
                     <p className="font-bold text-black dark:text-white flex items-center gap-1.5">
-                      "Add to Home Screen" <PlusSquare className="w-3.5 h-3.5 text-yellow-500 inline" />
+                      &quot;Add to Home Screen&quot; <PlusSquare className="w-3.5 h-3.5 text-yellow-500 inline" />
                     </p>
                     <p className="text-[11px] text-zinc-500 dark:text-zinc-400">Scroll down in the share menu.</p>
                   </div>
@@ -84,7 +83,7 @@ export function InstallModal({ isOpen, onClose }: InstallModalProps) {
                   <div className="p-2 bg-yellow-400 text-black rounded-xl shrink-0 font-extrabold text-xs">3</div>
                   <div className="space-y-0.5">
                     <p className="font-bold text-black dark:text-white flex items-center gap-1.5">
-                      Tap "Add" <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 inline" />
+                      Tap &quot;Add&quot; <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 inline" />
                     </p>
                     <p className="text-[11px] text-zinc-500 dark:text-zinc-400">Top-right corner to finish!</p>
                   </div>
@@ -106,7 +105,7 @@ export function InstallModal({ isOpen, onClose }: InstallModalProps) {
                       Look at Address Bar <Download className="w-3.5 h-3.5 text-yellow-500 inline" />
                     </p>
                     <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                      Click the small "Install Déloci" icon on the far right of your browser URL bar.
+                      Click the small &quot;Install Déloci&quot; icon on the far right of your browser URL bar.
                     </p>
                   </div>
                 </div>

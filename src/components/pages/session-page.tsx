@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useMemo } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import {
   ChevronLeft,
   Clock,
@@ -214,7 +214,7 @@ export function SessionPage({
     };
   }, [destination, showSuggestions, locationCoords]);
 
-  const requestCurrentLocation = () => {
+  const requestCurrentLocation = useCallback(() => {
     if (!navigator.geolocation) {
       setLocationStatus("denied");
       return;
@@ -251,7 +251,7 @@ export function SessionPage({
       () => setLocationStatus("denied"),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 }
     );
-  };
+  }, [activeSession, setLocationCoords, setLocationUpdatedAt, setManuallyPickedLocation, setLocationStatus]);
 
   const handleLocationPicked = (coordinates: SessionCoordinates) => {
     manuallyPickedLocationRef.current = true;
@@ -286,7 +286,7 @@ export function SessionPage({
         locationWatchIdRef.current = null;
       }
     };
-  }, [activeSession]);
+  }, [activeSession, requestCurrentLocation]);
 
   useEffect(() => () => {
     if (locationWatchIdRef.current !== null && navigator.geolocation) {
@@ -320,7 +320,7 @@ export function SessionPage({
       wakeLockRef.current = null;
       if (lock) void lock.release();
     };
-  }, [activeSession?.id]);
+  }, [activeSession]);
 
   const dayOptions = useMemo(() => {
     const options = [];
