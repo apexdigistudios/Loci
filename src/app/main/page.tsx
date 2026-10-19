@@ -1,17 +1,21 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Login, UserData } from "@/components/login";
 import { MainApp } from "@/components/main-app";
 import { SplashScreen } from "@/components/splash-screen";
 
 export default function MainPage() {
-  const [userPhone, setUserPhone] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return window.localStorage.getItem("loci_user_phone");
-  });
+  const [isMounted, setIsMounted] = useState(false);
+  const [userPhone, setUserPhone] = useState<string | null>(null);
 
-  const loading = false;
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(() => {
+      setUserPhone(window.localStorage.getItem("loci_user_phone"));
+      setIsMounted(true);
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, []);
 
   const handleLoginSuccess = (data: UserData) => {
     localStorage.setItem("loci_user_phone", data.phone);
@@ -23,7 +27,7 @@ export default function MainPage() {
     setUserPhone(null);
   };
 
-  if (loading) {
+  if (!isMounted) {
     return <SplashScreen />;
   }
 

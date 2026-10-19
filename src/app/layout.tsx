@@ -3,6 +3,7 @@ import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "../components/theme-provider";
 import { OfflineSyncProvider } from "../components/offline-sync-provider";
+import { ServiceWorkerRegistration } from "../components/service-worker-registration";
 import "leaflet/dist/leaflet.css";
 import "./globals.css";
 
@@ -97,6 +98,7 @@ export default function RootLayout({
             {children}
           </OfflineSyncProvider>
         </ThemeProvider>
+        <ServiceWorkerRegistration />
         <Script src="https://www.googletagmanager.com/gtag/js?id=G-GCDQ3CV7MY" strategy="afterInteractive" />
         <Script id="google-analytics" strategy="afterInteractive">
           {`
@@ -106,17 +108,6 @@ export default function RootLayout({
             gtag('config', 'G-GCDQ3CV7MY');
           `}
         </Script>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              if ('serviceWorker' in navigator) {
-                window.addEventListener('load', function() {
-                  navigator.serviceWorker.register('/sw.js');
-                });
-              }
-            `,
-          }}
-        />
       </body>
     </html>
   );

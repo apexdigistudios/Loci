@@ -8,7 +8,6 @@ import { cleanPhone } from "@/lib/utils";
 import { requestNotificationPermission, type NotificationPermissionResult } from "@/lib/notifications";
 import { sendPushTestNotification, subscribeUserToPush } from "@/lib/push-notifications";
 import { dispatchAlert, prepareAlertFeedback } from "@/lib/alerts";
-import { invokeNotificationApi } from "@/lib/notification-api";
 
 import { HomePage } from "@/components/pages/home-page";
 import { SessionPage } from "@/components/pages/session-page";
@@ -16,6 +15,7 @@ import { ContactsPage, Contact } from "@/components/pages/contacts-page";
 import { SharePage } from "@/components/pages/share-page";
 import { ProfilePage } from "@/components/pages/profile-page";
 import { NotificationsPage } from "@/components/pages/notifications-page";
+import { SplashScreen } from "@/components/splash-screen";
 
 interface MainAppProps {
   userPhone: string;
@@ -334,10 +334,15 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       return;
     }
     try {
-      const { count } = await invokeNotificationApi<{ count: number }>({ action: "unread_count" });
-      setUnreadNotificationCount(count);
+      const { count, error } = await supabase
+        .from("notifications")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("is_read", false);
+      if (error) throw error;
+      setUnreadNotificationCount(count ?? 0);
     } catch (error) {
-      console.error("Failed to load unread notification count:", error);
+      console.warn("Could not refresh notifications right now:", error);
     }
   }, [userId]);
 
@@ -723,8 +728,10 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const isDark = mounted && (theme === "dark" || resolvedTheme === "dark");
   const sessionHeadingSrc = isDark ? "/session-dark.png" : "/session-light.png";
 
+  if (!mounted) return <SplashScreen />;
+
   return (
-    <div className="min-h-screen bg-zinc-100/60 dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between max-w-md mx-auto w-full font-sans antialiased relative border-x border-zinc-200/50 dark:border-zinc-900 selection:bg-yellow-400 selection:text-black">
+    <div suppressHydrationWarning className="min-h-screen bg-zinc-100/60 dark:bg-black text-zinc-900 dark:text-zinc-100 flex flex-col justify-between max-w-md mx-auto w-full font-sans antialiased relative border-x border-zinc-200/50 dark:border-zinc-900 selection:bg-yellow-400 selection:text-black">
       {activeTab !== "session" && (
         <header className="sticky top-0 z-50 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5 bg-white/70 dark:bg-black/70 backdrop-blur-3xl border-b border-zinc-200/40 dark:border-zinc-800/40 grid grid-cols-3 items-center">
           <div className="text-left truncate leading-none">

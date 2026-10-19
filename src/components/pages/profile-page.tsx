@@ -19,7 +19,6 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { supabase } from "@/lib/supabase";
-import { invokeNotificationApi } from "@/lib/notification-api";
 
 interface ProfilePageProps {
   fullName: string;
@@ -147,7 +146,12 @@ export function ProfilePage({
       const publicUrl = `${publicUrlData.publicUrl}?t=${Date.now()}`;
 
       // 5. Sync user database record
-      await invokeNotificationApi({ action: "update_avatar", avatarUrl: publicUrl });
+      if (!userId) throw new Error("Your profile is still loading. Please try again.");
+      const { error: profileError } = await supabase
+        .from("users")
+        .update({ avatar_url: publicUrl })
+        .eq("id", userId);
+      if (profileError) throw profileError;
 
       setCurrentAvatar(publicUrl);
       if (onAvatarChange) onAvatarChange(publicUrl);
