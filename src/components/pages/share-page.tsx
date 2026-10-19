@@ -12,6 +12,8 @@ interface SharePageProps {
 interface ReferredUser {
   referred_phone: string;
   created_at: string;
+  nickname: string | null;
+  full_name: string | null;
 }
 
 export function SharePage({ nickname, userPhone }: SharePageProps) {
@@ -59,7 +61,24 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
         if (error) throw error;
 
         if (!cancelled && data) {
-          setReferrals(data as ReferredUser[]);
+          const referredPhones = data.map((referral) => referral.referred_phone);
+          const { data: profiles, error: profilesError } = referredPhones.length
+            ? await supabase
+                .from("users")
+                .select("phone, nickname, full_name")
+                .in("phone", referredPhones)
+            : { data: [], error: null };
+          if (profilesError) throw profilesError;
+
+          const profileByPhone = new Map((profiles ?? []).map((profile) => [profile.phone, profile]));
+          setReferrals(data.map((referral) => {
+            const profile = profileByPhone.get(referral.referred_phone);
+            return {
+              ...referral,
+              nickname: profile?.nickname ?? null,
+              full_name: profile?.full_name ?? null,
+            };
+          }));
           setReferralError("");
         }
       } catch (err) {
@@ -163,14 +182,14 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
           </div>
         ) : (
           <div className="space-y-2">
-            {referrals.map((item, idx) => (
+            {referrals.map((item) => (
               <div
-                key={idx}
+                key={item.referred_phone}
                 className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 flex items-center justify-between text-xs"
               >
                 <div>
                   <p className="font-semibold text-black dark:text-white">
-                    {item.referred_phone}
+                    {item.nickname || item.full_name || "Déloci member"}
                   </p>
                   <p className="text-[10px] text-zinc-400 mt-0.5">
                     Joined {new Date(item.created_at).toLocaleDateString()}

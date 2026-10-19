@@ -102,6 +102,7 @@ export function ContactsPage({
   const [subTab, setSubTab] = useState<"contacts" | "shared">(
     () => (openSessionId ? "shared" : "contacts")
   );
+  const [circleView, setCircleView] = useState<"groups" | "contacts">("groups");
   const [activeGroupView, setActiveGroupView] = useState<string | null>(null);
 
   // Modal State
@@ -283,7 +284,85 @@ export function ContactsPage({
       {/* SUBVIEW 1: MY CIRCLE */}
       {subTab === "contacts" && (
         <>
-          {activeGroupView ? (
+          <div role="tablist" aria-label="Circle view" className="grid grid-cols-2 gap-1 rounded-xl border border-zinc-200 bg-zinc-100 p-1 dark:border-zinc-800 dark:bg-zinc-900">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={circleView === "groups"}
+              onClick={() => {
+                setCircleView("groups");
+                setActiveGroupView(null);
+              }}
+              className={`min-h-10 rounded-lg px-3 text-xs font-bold transition-colors ${circleView === "groups" ? "bg-white text-zinc-950 shadow-sm dark:bg-zinc-800 dark:text-white" : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white"}`}
+            >
+              Groups
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={circleView === "contacts"}
+              onClick={() => {
+                setCircleView("contacts");
+                setActiveGroupView(null);
+              }}
+              className={`min-h-10 rounded-lg px-3 text-xs font-bold transition-colors ${circleView === "contacts" ? "bg-white text-zinc-950 shadow-sm dark:bg-zinc-800 dark:text-white" : "text-zinc-500 hover:text-zinc-900 dark:hover:text-white"}`}
+            >
+              Contacts ({contacts.length})
+            </button>
+          </div>
+
+          {circleView === "contacts" ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between px-1">
+                <div>
+                  <h2 className="text-base font-black text-black dark:text-white">All Contacts</h2>
+                  <p className="text-[11px] text-zinc-400">Your trusted circle across every group.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAddModal(true)}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-yellow-400 text-black shadow-md shadow-yellow-400/20"
+                  aria-label="Add contact"
+                  title="Add contact"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
+              </div>
+              {contacts.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-zinc-300 px-4 py-10 text-center dark:border-zinc-800">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">No trusted contacts yet.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {contacts.map((contact) => (
+                    <div key={contact.id} className="flex items-center justify-between rounded-xl border border-zinc-200 bg-white px-3 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-yellow-400/40 bg-zinc-900 text-xs font-black uppercase text-yellow-400">
+                          {contact.isLociUser && contact.avatar_url
+                            ? <img src={contact.avatar_url} alt="" className="h-full w-full object-cover" />
+                            : contact.name.slice(0, 2)}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-extrabold text-zinc-950 dark:text-white">{contact.name}</p>
+                          <p className="truncate font-mono text-[11px] text-zinc-400">{contact.phone}</p>
+                          <p className="text-[10px] text-zinc-500">{contact.group_category || "Emergency Circle"}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteContact(contact.id)}
+                        className="p-2 text-zinc-400 transition-colors hover:text-red-500"
+                        aria-label={`Remove ${contact.name}`}
+                        title="Remove contact"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : activeGroupView ? (
             <div className="space-y-4 animate-in fade-in slide-in-from-right-2">
               <div className="flex items-center justify-between">
                 <button

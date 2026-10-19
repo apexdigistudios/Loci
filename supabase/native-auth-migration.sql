@@ -48,6 +48,10 @@ declare
   profile_nickname text;
   referrer_code text;
   normalized_referrer_phone text;
+  resolved_referrer_id uuid;
+  resolved_referrer_phone text;
+  resolved_referrer_name text;
+  inserted_referral_count integer;
 begin
   clean_digits := regexp_replace(coalesce(new.raw_user_meta_data ->> 'phone', ''), '\D', '', 'g');
   if length(clean_digits) < 8 or length(clean_digits) > 15 then
@@ -79,8 +83,10 @@ begin
   if referrer_code is not null then
     normalized_referrer_phone := '+' || regexp_replace(referrer_code, '\D', '', 'g');
 
-    insert into public.referrals (referrer_phone, referred_phone)
-    select referrer.phone, clean_phone
+    select referrer.id,
+           referrer.phone,
+           coalesce(nullif(btrim(referrer.nickname), ''), nullif(btrim(referrer.full_name), ''))
+      into resolved_referrer_id, resolved_referrer_phone, resolved_referrer_name
       from public.users as referrer
      where referrer.id <> new.id
        and (
@@ -92,11 +98,6 @@ begin
          or referrer.phone = normalized_referrer_phone
          or lower(referrer.nickname) = lower(referrer_code)
        )
-       and not exists (
-         select 1 from public.referrals as existing_referral
-          where existing_referral.referrer_phone = referrer.phone
-            and existing_referral.referred_phone = clean_phone
-       )
      order by case
        when referrer.id = case
          when referrer_code ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -106,8 +107,42 @@ begin
        when referrer.phone = normalized_referrer_phone then 1
        else 2
      end
-     limit 1
-    on conflict do nothing;
+     limit 1;
+
+    if resolved_referrer_id is not null then
+      insert into public.referrals (referrer_phone, referred_phone)
+      values (resolved_referrer_phone, clean_phone)
+      on conflict (referred_phone) do nothing;
+      get diagnostics inserted_referral_count = row_count;
+
+      if inserted_referral_count > 0 then
+        insert into public.trusted_contacts (user_phone, name, phone, group_category)
+        select resolved_referrer_phone, profile_nickname, clean_phone, 'Besties'
+         where not exists (
+           select 1 from public.trusted_contacts as contact
+            where contact.user_phone = resolved_referrer_phone
+              and contact.phone = clean_phone
+         );
+
+        insert into public.trusted_contacts (user_phone, name, phone, group_category)
+        select clean_phone, resolved_referrer_name, resolved_referrer_phone, 'Besties'
+         where not exists (
+           select 1 from public.trusted_contacts as contact
+            where contact.user_phone = clean_phone
+              and contact.phone = resolved_referrer_phone
+         );
+
+        insert into public.notifications (user_id, sender_id, title, message, type, metadata)
+        values (
+          resolved_referrer_id,
+          new.id,
+          'A friend joined Déloci',
+          profile_nickname || ' joined Déloci using your referral link.',
+          'update',
+          jsonb_build_object('event', 'referral_signup', 'referred_user_id', new.id, 'referred_phone', clean_phone)
+        );
+      end if;
+    end if;
   end if;
   return new;
 end;
