@@ -1,51 +1,46 @@
 import { supabase } from "@/lib/supabase";
-import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 
 export async function invokeNotificationApi<T>(body: Record<string, unknown>): Promise<T> {
-  // 1. Get current session token
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw new Error("Could not read your sign-in session.", { cause: sessionError });
+
   const accessToken = sessionData.session?.access_token;
+  if (!accessToken) throw new Error("Your sign-in has expired. Please sign in again to continue.");
 
-  if (sessionError || !accessToken) {
-    throw new Error("Your sign-in has expired. Please sign in again to continue.");
-  }
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, "");
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !anonKey) throw new Error("The notification service is not configured.");
 
+  const response = await fetch(`${supabaseUrl}/functions/v1/send-push`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: anonKey,
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const responseText = await response.text();
+  let result: unknown;
   try {
-    // 2. Pass body and explicit headers to invoke
-    const { data, error } = await supabase.functions.invoke<T>("send-push", {
-      body,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    if (error) {
-      throw error;
-    }
-
-    if (data == null) {
-      throw new Error("The notification service returned an empty response.");
-    }
-
-    return data;
-  } catch (error) {
-    const friendlyMessage = getFriendlyErrorMessage(
-      error,
-      "We couldn’t complete that notification request right now. Please try again."
-    );
-
-    const context = error && typeof error === "object" && "context" in error
-      ? (error as { context?: unknown }).context
-      : undefined;
-
-    const status = context instanceof Response ? context.status : undefined;
-
-    console.warn("Notification request failed.", {
-      message: friendlyMessage,
-      status,
-      error,
-    });
-
-    throw new Error(friendlyMessage, { cause: error });
+    result = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    result = { error: responseText || "The notification service returned an invalid response." };
   }
+
+  if (!response.ok) {
+    const message = result && typeof result === "object" && "error" in result && typeof result.error === "string"
+      ? result.error
+      : `Notification request failed (${response.status}).`;
+    console.warn("Notification function request failed:", {
+      status: response.status,
+      statusText: response.statusText,
+      body: result,
+    });
+    throw new Error(message, { cause: { status: response.status, body: result } });
+  }
+
+  if (result === null) throw new Error("The notification service returned an empty response.");
+  return result as T;
 }

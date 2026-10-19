@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import webpush from "https://esm.sh/web-push@3.6.3";
 
-const corsHeaders = {
+const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -20,21 +20,17 @@ const NOTIFICATION_TYPES = new Set([
   "guardian_alert",
 ]);
 
-function jsonResponse(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: corsHeaders });
-}
+type RequestBody = Record<string, unknown>;
+type AdminClient = ReturnType<typeof createClient>;
+type Sender = { id: string; phone: string };
+type Recipient = { id: string; phone: string };
 
-function errorMessage(error: unknown) {
-  if (error instanceof Error && error.message) return error.message;
-  if (error && typeof error === "object" && "message" in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string" && message) return message;
-  }
-  return typeof error === "string" && error ? error : "Server error occurred";
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: CORS_HEADERS });
 }
 
 function normalizePhone(value: string) {
-  const digits = value.trim().replace(/\D/g, "");
+  const digits = value.replace(/\D/g, "");
   return digits ? `+${digits}` : "";
 }
 
@@ -42,7 +38,28 @@ function normalizeEmail(value: string) {
   return value.trim().toLowerCase();
 }
 
-async function publishNotificationChange(admin: ReturnType<typeof createClient>, userId: string) {
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
+    return error.message;
+  }
+  return "Unexpected notification service error";
+}
+
+function parseBody(value: unknown): RequestBody | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as RequestBody
+    : null;
+}
+
+function bearerToken(request: Request) {
+  const header = request.headers.get("Authorization") ?? request.headers.get("authorization");
+  const match = header?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || null;
+}
+
+async function publishNotificationChange(admin: AdminClient, userId: string) {
   const channel = admin.channel(`notifications:${userId}`, { config: { private: false } });
   try {
     await new Promise<void>((resolve, reject) => {
@@ -57,66 +74,244 @@ async function publishNotificationChange(admin: ReturnType<typeof createClient>,
         }
       });
     });
-    await channel.send({
-      type: "broadcast",
-      event: "changed",
-      payload: { userId },
-    });
+    await channel.send({ type: "broadcast", event: "changed", payload: { userId } });
   } catch (error) {
-    console.warn("Notification refresh broadcast failed:", error);
+    console.warn("Notification realtime update failed:", errorMessage(error));
   } finally {
     await admin.removeChannel(channel);
   }
 }
 
-Deno.serve(async (req) => {
+async function resolveRecipients(admin: AdminClient, body: RequestBody) {
+  const targets = [
+    ...(Array.isArray(body.userIds) ? body.userIds : []),
+    ...(Array.isArray(body.userIds) ? [] : [body.userId ?? body.user_id].filter(Boolean)),
+    ...(Array.isArray(body.phones) ? body.phones : []),
+    ...(Array.isArray(body.emails) ? body.emails : []),
+    ...(body.phone ? [body.phone] : []),
+    ...(body.email ? [body.email] : []),
+  ].filter((target): target is string => typeof target === "string")
+    .map((target) => target.trim())
+    .filter(Boolean);
+
+  if (!targets.length) return { recipients: [] as Recipient[], error: null };
+
+  const ids = new Set<string>();
+  const phones = new Set<string>();
+  const emails = new Set<string>();
+  for (const target of targets) {
+    if (UUID_PATTERN.test(target)) ids.add(target);
+    else if (EMAIL_PATTERN.test(target)) emails.add(normalizeEmail(target));
+    else if (PHONE_PATTERN.test(target)) phones.add(normalizePhone(target));
+    else return { recipients: null, error: "Invalid notification recipient" };
+  }
+
+  const queries = [];
+  if (ids.size) queries.push(admin.from("users").select("id, phone").in("id", Array.from(ids)));
+  if (phones.size) queries.push(admin.from("users").select("id, phone").in("phone", Array.from(phones)));
+  if (emails.size) queries.push(admin.from("users").select("id, phone").in("email", Array.from(emails)));
+  const results = await Promise.all(queries);
+  if (results.some((result) => result.error)) {
+    return { recipients: null, error: "Could not resolve notification recipients" };
+  }
+
+  const uniqueRecipients = new Map<string, Recipient>();
+  for (const result of results) {
+    for (const user of result.data ?? []) uniqueRecipients.set(user.id, { id: user.id, phone: user.phone });
+  }
+  return { recipients: Array.from(uniqueRecipients.values()), error: null };
+}
+
+async function sendNotifications(
+  admin: AdminClient,
+  sender: Sender,
+  recipients: Recipient[],
+  body: RequestBody,
+) {
+  const vapidPublicKey = Deno.env.get("VAPID_PUBLIC_KEY") || "";
+  const vapidPrivateKey = Deno.env.get("VAPID_PRIVATE_KEY") || "";
+  if (!vapidPublicKey || !vapidPrivateKey) return jsonResponse({ error: "Push delivery is not configured" }, 500);
+  if (!recipients.length) return jsonResponse({ success: true, delivered: 0, notificationCount: 0 });
+
+  const { data: contacts, error: contactsError } = await admin
+    .from("trusted_contacts")
+    .select("phone")
+    .eq("user_phone", sender.phone);
+  if (contactsError) return jsonResponse({ error: "Could not verify recipient permissions" }, 500);
+
+  const allowedPhones = new Set((contacts ?? []).map((contact) => normalizePhone(contact.phone)));
+  if (recipients.some((recipient) => recipient.id !== sender.id && !allowedPhones.has(normalizePhone(recipient.phone)))) {
+    return jsonResponse({ error: "Recipient is not in your trusted contacts" }, 403);
+  }
+
+  const type = typeof body.type === "string" && NOTIFICATION_TYPES.has(body.type) ? body.type : "update";
+  const title = typeof body.title === "string" ? body.title.slice(0, 160) : "Déloci Alert";
+  const message = typeof body.body === "string" ? body.body.slice(0, 2000) : "Safety update received.";
+  const metadata = {
+    ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata : {}),
+    url: typeof body.url === "string" ? body.url : "/",
+    tag: typeof body.tag === "string" ? body.tag.slice(0, 100) : "deloci-alert",
+  };
+
+  const { data: notifications, error: insertError } = await admin.from("notifications").insert(
+    recipients.map((recipient) => ({
+      user_id: recipient.id,
+      sender_id: sender.id,
+      title,
+      message,
+      type,
+      metadata,
+    }))
+  ).select("id, user_id");
+  if (insertError) return jsonResponse({ error: "Could not save notification" }, 500);
+
+  const { data: subscriptions, error: subscriptionsError } = await admin
+    .from("user_push_subscriptions")
+    .select("id, user_id, endpoint, p256dh, auth")
+    .in("user_id", recipients.map((recipient) => recipient.id))
+    .eq("is_active", true);
+  if (subscriptionsError) return jsonResponse({ error: "Could not load device subscriptions" }, 500);
+
+  webpush.setVapidDetails(
+    Deno.env.get("VAPID_SUBJECT") || "mailto:admin@deloci.app",
+    vapidPublicKey,
+    vapidPrivateKey,
+  );
+  const payload = JSON.stringify({ title, body: message, type, url: metadata.url, tag: metadata.tag, metadata });
+  const deliveries = await Promise.allSettled((subscriptions ?? []).map(async (subscription) => {
+    try {
+      return await webpush.sendNotification({
+        endpoint: subscription.endpoint,
+        keys: { p256dh: subscription.p256dh, auth: subscription.auth },
+      }, payload, { headers: { Urgency: "high" }, TTL: 60 });
+    } catch (error) {
+      const statusCode = error && typeof error === "object" && "statusCode" in error
+        ? error.statusCode
+        : undefined;
+      if (statusCode === 404 || statusCode === 410) {
+        const { error: updateError } = await admin
+          .from("user_push_subscriptions")
+          .update({ is_active: false })
+          .eq("id", subscription.id);
+        if (updateError) console.warn("Could not deactivate expired push subscription:", errorMessage(updateError));
+      }
+      throw error;
+    }
+  }));
+
+  await Promise.all(recipients.map((recipient) => publishNotificationChange(admin, recipient.id)));
+  return jsonResponse({
+    success: true,
+    notificationCount: notifications?.length ?? 0,
+    delivered: deliveries.filter((delivery) => delivery.status === "fulfilled").length,
+    failures: deliveries.filter((delivery) => delivery.status === "rejected").length,
+  });
+}
+
+Deno.serve(async (request) => {
+  if (request.method === "OPTIONS") return new Response("ok", { status: 200, headers: CORS_HEADERS });
+  if (request.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
+
   let action = "";
   try {
-    if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-    if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
-
     const supabaseUrl = Deno.env.get("SUPABASE_URL")?.trim() || "";
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim() || "";
     if (!supabaseUrl || !serviceRoleKey) {
-      console.error("Edge function configuration error: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
-      return jsonResponse({ error: "Server configuration error: missing service keys" }, 500);
+      console.error("Push function is missing Supabase service configuration");
+      return jsonResponse({ error: "Server configuration error" }, 500);
     }
 
     const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
-    let body: Record<string, unknown>;
-    try {
-      const parsedBody: unknown = await req.json();
-      if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
-        return jsonResponse({ error: "Invalid request body" }, 400);
-      }
-      body = parsedBody as Record<string, unknown>;
-    } catch {
-      return jsonResponse({ error: "Invalid request body" }, 400);
-    }
-    action = typeof body.action === "string" ? body.action : "";
-
-    // Robust case-insensitive header check for Bearer token
-    const authHeader = req.headers.get("Authorization") || req.headers.get("authorization");
-    const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
-    if (!token || token === authHeader) {
-      console.warn("Missing or malformed Authorization header:", authHeader);
-      return jsonResponse({ error: "Unauthorized: Missing token" }, 401);
-    }
+    const token = bearerToken(request);
+    if (!token) return jsonResponse({ error: "Unauthorized" }, 401);
 
     const { data: { user }, error: authError } = await admin.auth.getUser(token);
-    if (authError || !user) {
-      console.warn("Supabase auth.getUser failed:", { authError, tokenPreview: token.slice(0, 10) + "..." });
-      return jsonResponse({ error: "Unauthorized: Invalid session" }, 401);
-    }
+    if (authError || !user) return jsonResponse({ error: "Unauthorized" }, 401);
 
+    let body: RequestBody | null;
+    try {
+      body = parseBody(await request.json());
+    } catch {
+      body = null;
+    }
+    if (!body) return jsonResponse({ error: "Invalid request body" }, 400);
+
+    action = typeof body.action === "string" ? body.action : "";
     const { data: sender, error: senderError } = await admin
       .from("users")
       .select("id, phone")
       .eq("id", user.id)
       .maybeSingle();
-    if (senderError || !sender) {
-      console.warn("Notification profile not found for user ID:", user.id);
-      return jsonResponse({ error: "Notification profile not found" }, 401);
+    if (senderError || !sender) return jsonResponse({ error: "Notification profile not found" }, 401);
+
+    if (action === "subscribe") {
+      const endpoint = typeof body.endpoint === "string" ? body.endpoint : "";
+      const p256dh = typeof body.p256dh === "string" ? body.p256dh : "";
+      const auth = typeof body.auth === "string" ? body.auth : "";
+      let parsedEndpoint: URL;
+      try {
+        parsedEndpoint = new URL(endpoint);
+      } catch {
+        return jsonResponse({ error: "Invalid push endpoint" }, 400);
+      }
+      if (parsedEndpoint.protocol !== "https:" || !p256dh || !auth) {
+        return jsonResponse({ error: "Invalid push subscription" }, 400);
+      }
+      const { error } = await admin.from("user_push_subscriptions").upsert({
+        user_id: sender.id,
+        endpoint: parsedEndpoint.toString(),
+        p256dh,
+        auth,
+        device_info: body.deviceInfo && typeof body.deviceInfo === "object" ? body.deviceInfo : {},
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "user_id,endpoint" });
+      if (error) return jsonResponse({ error: "Could not save device subscription" }, 500);
+      return jsonResponse({ success: true });
+    }
+
+    if (action === "subscription_count") {
+      const { count, error } = await admin.from("user_push_subscriptions")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", sender.id)
+        .eq("is_active", true);
+      if (error) return jsonResponse({ error: "Could not check device subscriptions" }, 500);
+      return jsonResponse({ count: count ?? 0 });
+    }
+
+    if (action === "unread_count") {
+      const { count, error } = await admin.from("notifications")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", sender.id)
+        .eq("is_read", false);
+      if (error) return jsonResponse({ error: "Could not load notification count" }, 500);
+      return jsonResponse({ count: count ?? 0 });
+    }
+
+    if (action === "list") {
+      const { data, error } = await admin.from("notifications")
+        .select("*")
+        .eq("user_id", sender.id)
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (error) return jsonResponse({ error: "Could not load notifications" }, 500);
+      return jsonResponse({ notifications: data ?? [] });
+    }
+
+    if (action === "mark_read" || action === "delete" || action === "clear") {
+      let query = admin.from("notifications");
+      if (action === "mark_read") query = query.update({ is_read: body.isRead !== false });
+      else query = query.delete();
+      query = query.eq("user_id", sender.id);
+      if (action !== "clear") {
+        const id = typeof body.id === "string" ? body.id : "";
+        if (!UUID_PATTERN.test(id)) return jsonResponse({ error: "Invalid notification ID" }, 400);
+        query = query.eq("id", id);
+      }
+      const { error } = await query;
+      if (error) return jsonResponse({ error: "Could not update notification" }, 500);
+      await publishNotificationChange(admin, sender.id);
+      return jsonResponse({ success: true });
     }
 
     if (action === "update_avatar") {
@@ -134,195 +329,19 @@ Deno.serve(async (req) => {
       return jsonResponse({ success: true, avatarUrl });
     }
 
-    if (action === "subscribe") {
-      const { endpoint, p256dh, auth, deviceInfo } = body;
-      if (typeof endpoint !== "string" || typeof p256dh !== "string" || typeof auth !== "string") {
-        return jsonResponse({ error: "Invalid push subscription" }, 400);
+    if (action === "send" || action === "test") {
+      const { recipients, error } = await resolveRecipients(admin, body);
+      if (error) return jsonResponse({ error }, 400);
+      if (!recipients?.length) return jsonResponse({ success: true, delivered: 0, notificationCount: 0 });
+      if (action === "test" && recipients.some((recipient) => recipient.id !== sender.id)) {
+        return jsonResponse({ error: "A test notification can only target your own devices" }, 403);
       }
-      let endpointUrl: URL;
-      try {
-        endpointUrl = new URL(endpoint);
-      } catch {
-        return jsonResponse({ error: "Invalid push endpoint" }, 400);
-      }
-      if (endpointUrl.protocol !== "https:" || !p256dh || !auth) {
-        return jsonResponse({ error: "Invalid push subscription" }, 400);
-      }
-      const { error } = await admin.from("user_push_subscriptions").upsert({
-        user_id: sender.id,
-        endpoint: endpointUrl.toString(),
-        p256dh,
-        auth,
-        device_info: deviceInfo && typeof deviceInfo === "object" ? deviceInfo : {},
-        is_active: true,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "endpoint" });
-      if (error) return jsonResponse({ error: "Could not save device subscription" }, 500);
-      return jsonResponse({ success: true });
+      return await sendNotifications(admin, sender, recipients, body);
     }
 
-    if (action === "subscription_count") {
-      const { count, error } = await admin
-        .from("user_push_subscriptions")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", sender.id)
-        .eq("is_active", true);
-      if (error) return jsonResponse({ error: "Could not check device subscriptions" }, 500);
-      return jsonResponse({ count: count || 0 });
-    }
-
-    if (action === "list" || action === "unread_count") {
-      let query = admin.from("notifications").select("*", action === "unread_count" ? { count: "exact", head: true } : undefined)
-        .eq("user_id", sender.id);
-      if (action === "unread_count") {
-        query = query.eq("is_read", false);
-        const { count, error } = await query;
-        if (error) return jsonResponse({ error: "Could not load notification count" }, 500);
-        return jsonResponse({ count: count || 0 });
-      }
-      const { data, error } = await query.order("created_at", { ascending: false }).limit(100);
-      if (error) return jsonResponse({ error: "Could not load notifications" }, 500);
-      return jsonResponse({ notifications: data || [] });
-    }
-
-    if (action === "mark_read" || action === "delete" || action === "clear") {
-      let query = admin.from("notifications");
-      if (action === "mark_read") {
-        query = query.update({ is_read: body.isRead !== false });
-      } else {
-        query = query.delete();
-      }
-      query = query.eq("user_id", sender.id);
-      if (action !== "clear") {
-        if (!UUID_PATTERN.test(String(body.id || ""))) return jsonResponse({ error: "Invalid notification ID" }, 400);
-        query = query.eq("id", body.id);
-      }
-      const { error } = await query;
-      if (error) return jsonResponse({ error: "Could not update notification" }, 500);
-      await publishNotificationChange(admin, sender.id);
-      return jsonResponse({ success: true });
-    }
-
-    if (action !== "send" && action !== "test") return jsonResponse({ error: `Invalid action: ${action}` }, 400);
-
-    const vapidPublicKey = Deno.env.get("VAPID_PUBLIC_KEY") || "";
-    const vapidPrivateKey = Deno.env.get("VAPID_PRIVATE_KEY") || "";
-    if (!vapidPublicKey || !vapidPrivateKey) return jsonResponse({ error: "Push delivery is not configured" }, 500);
-
-    const requestedTargets = [
-      ...(Array.isArray(body.userIds) ? body.userIds : []),
-      ...(Array.isArray(body.userIds) ? [] : [body.userId || body.user_id].filter(Boolean)),
-      ...(Array.isArray(body.phones) ? body.phones : []),
-      ...(Array.isArray(body.emails) ? body.emails : []),
-      ...(body.phone ? [body.phone] : []),
-      ...(body.email ? [body.email] : []),
-    ].filter((target) => typeof target === "string").map((target) => target.trim()).filter(Boolean);
-
-    if (requestedTargets.length === 0) return jsonResponse({ success: true, delivered: 0 });
-
-    const targetIds = new Set<string>();
-    const targetPhones = new Set<string>();
-    const targetEmails = new Set<string>();
-    for (const target of requestedTargets) {
-      if (UUID_PATTERN.test(target)) targetIds.add(target);
-      else if (EMAIL_PATTERN.test(target)) targetEmails.add(normalizeEmail(target));
-      else if (PHONE_PATTERN.test(target)) targetPhones.add(normalizePhone(target));
-      else return jsonResponse({ error: "Invalid notification recipient" }, 400);
-    }
-
-    const targetQueries = [];
-    if (targetIds.size) targetQueries.push(admin.from("users").select("id, phone").in("id", [...targetIds]));
-    if (targetPhones.size) targetQueries.push(admin.from("users").select("id, phone").in("phone", [...targetPhones]));
-    if (targetEmails.size) targetQueries.push(admin.from("users").select("id, phone").in("email", [...targetEmails]));
-    const targetResults = await Promise.all(targetQueries);
-    const targetError = targetResults.find((result) => result.error)?.error;
-    if (targetError) return jsonResponse({ error: "Could not resolve notification recipients" }, 500);
-    const recipients = Array.from(new Map(targetResults.flatMap((result) => result.data || []).map((user) => [user.id, user])).values());
-    if (recipients.length === 0) return jsonResponse({ success: true, delivered: 0, message: "No registered recipients found" });
-    if (action === "test" && recipients.some((recipient) => recipient.id !== sender.id)) {
-      return jsonResponse({ error: "A test notification can only target your own devices" }, 403);
-    }
-
-    const { data: contacts, error: contactsError } = await admin
-      .from("trusted_contacts")
-      .select("phone")
-      .eq("user_phone", sender.phone);
-    if (contactsError) return jsonResponse({ error: "Could not verify recipient permissions" }, 500);
-    const allowedPhones = new Set((contacts || []).map((contact) => normalizePhone(contact.phone)));
-    const unauthorized = recipients.find((recipient) => recipient.id !== sender.id && !allowedPhones.has(normalizePhone(recipient.phone)));
-    if (unauthorized) return jsonResponse({ error: "Recipient is not in your trusted contacts" }, 403);
-
-    const requestedType = typeof body.type === "string" && NOTIFICATION_TYPES.has(body.type) ? body.type : "update";
-    const title = typeof body.title === "string" ? body.title.slice(0, 160) : "Déloci Alert";
-    const message = typeof body.body === "string" ? body.body.slice(0, 2000) : "Safety update received.";
-    const metadata = {
-      ...(body.metadata && typeof body.metadata === "object" ? body.metadata : {}),
-      url: typeof body.url === "string" ? body.url : "/",
-      tag: typeof body.tag === "string" ? body.tag.slice(0, 100) : "deloci-alert",
-    };
-
-    const { data: notifications, error: insertError } = await admin.from("notifications").insert(
-      recipients.map((recipient) => ({
-        user_id: recipient.id,
-        sender_id: sender.id,
-        title,
-        message,
-        type: requestedType,
-        metadata,
-      }))
-    ).select("id, user_id");
-    if (insertError) return jsonResponse({ error: "Could not save notification" }, 500);
-
-    webpush.setVapidDetails(
-      Deno.env.get("VAPID_SUBJECT") || "mailto:admin@deloci.app",
-      vapidPublicKey,
-      vapidPrivateKey
-    );
-    const recipientIds = recipients.map((recipient) => recipient.id);
-    const { data: subscriptions, error: subscriptionError } = await admin
-      .from("user_push_subscriptions")
-      .select("id, user_id, endpoint, p256dh, auth")
-      .in("user_id", recipientIds)
-      .eq("is_active", true);
-    if (subscriptionError) return jsonResponse({ error: "Could not load device subscriptions" }, 500);
-
-    const payload = JSON.stringify({
-      title,
-      body: message,
-      type: requestedType,
-      url: metadata.url,
-      tag: metadata.tag,
-      metadata,
-    });
-    const pushOptions = { headers: { Urgency: "high" }, TTL: 60 };
-    const results = await Promise.allSettled((subscriptions || []).map(async (subscription) => {
-      try {
-        return await webpush.sendNotification({
-          endpoint: subscription.endpoint,
-          keys: { p256dh: subscription.p256dh, auth: subscription.auth },
-        }, payload, pushOptions);
-      } catch (error) {
-        const statusCode = error && typeof error === "object" && "statusCode" in error
-          ? error.statusCode
-          : undefined;
-        if (statusCode === 404 || statusCode === 410) {
-          await admin.from("user_push_subscriptions").update({ is_active: false }).eq("id", subscription.id);
-        }
-        throw error;
-      }
-    }));
-
-    await Promise.all(recipients.map((recipient) => publishNotificationChange(admin, recipient.id)));
-    return jsonResponse({
-      success: true,
-      notificationCount: notifications?.length || 0,
-      delivered: results.filter((result) => result.status === "fulfilled").length,
-      failures: results.filter((result) => result.status === "rejected").length,
-    });
+    return jsonResponse({ error: "Unsupported notification action" }, 400);
   } catch (error) {
-    console.error("Edge function error:", error);
-    const message = errorMessage(error);
-    const status = /invalid|missing|required|must be|please enter/i.test(message) ? 400 : 500;
-    return jsonResponse({ error: message }, status);
+    console.error("Push notification action failed:", { action, error: errorMessage(error) });
+    return jsonResponse({ error: "Could not complete the notification request" }, 500);
   }
 });
