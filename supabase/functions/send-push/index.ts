@@ -21,7 +21,8 @@ const NOTIFICATION_TYPES = new Set([
 ]);
 
 type RequestBody = Record<string, unknown>;
-type AdminClient = ReturnType<typeof createClient>;
+// deno-lint-ignore no-explicit-any
+type AdminClient = any;
 type Sender = { id: string; phone: string };
 type Recipient = { id: string; phone: string };
 
@@ -44,7 +45,7 @@ function errorMessage(error: unknown) {
   if (error && typeof error === "object" && "message" in error && typeof (error as { message?: unknown }).message === "string") {
     return (error as { message: string }).message;
   }
-  return "Unexpected notification service error";
+  return JSON.stringify(error);
 }
 
 function parseBody(value: unknown): RequestBody | null {
@@ -82,8 +83,8 @@ async function publishNotificationChange(admin: AdminClient, userId: string) {
   }
 }
 
-async function resolveRecipients(admin: AdminClient, body: RequestBody) {
-  const targets = [
+async function resolveRecipients(admin: AdminClient, body: RequestBody, fallbackUserId?: string) {
+  let targets = [
     ...(Array.isArray(body.userIds) ? body.userIds : []),
     ...(Array.isArray(body.userIds) ? [] : [body.userId ?? body.user_id].filter(Boolean)),
     ...(Array.isArray(body.phones) ? body.phones : []),
@@ -93,6 +94,10 @@ async function resolveRecipients(admin: AdminClient, body: RequestBody) {
   ].filter((target): target is string => typeof target === "string")
     .map((target) => target.trim())
     .filter(Boolean);
+
+  if (!targets.length && fallbackUserId) {
+    targets = [fallbackUserId];
+  }
 
   if (!targets.length) return { recipients: [] as Recipient[], error: null };
 
@@ -166,7 +171,7 @@ async function sendNotifications(
       metadata,
     }))
   ).select("id, user_id");
-  if (insertError) return jsonResponse({ error: "Could not save notification" }, 500);
+  if (insertError) return jsonResponse({ error: `Could not save notification: ${errorMessage(insertError)}` }, 500);
 
   const { data: subscriptions, error: subscriptionsError } = await admin
     .from("user_push_subscriptions")
@@ -192,11 +197,10 @@ async function sendNotifications(
         ? (error as { statusCode?: number }).statusCode
         : undefined;
       if (statusCode === 404 || statusCode === 410) {
-        const { error: updateError } = await admin
+        await admin
           .from("user_push_subscriptions")
           .update({ is_active: false })
           .eq("id", subscription.id);
-        if (updateError) console.warn("Could not deactivate expired push subscription:", errorMessage(updateError));
       }
       throw error;
     }
@@ -220,17 +224,18 @@ Deno.serve(async (request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")?.trim() || "";
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim() || "";
     if (!supabaseUrl || !serviceRoleKey) {
-      console.error("Push function is missing Supabase service configuration");
-      return jsonResponse({ error: "Server configuration error" }, 500);
+      return jsonResponse({ error: "Server configuration error: missing keys" }, 500);
     }
 
     const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
     const token = bearerToken(request);
-    if (!token) return jsonResponse({ error: "Unauthorized" }, 401);
+    if (!token) return jsonResponse({ error: "Unauthorized: missing token" }, 401);
 
-    const { data: authData, error: authError } = await admin.auth.getUser(token);
-    const user = authData.user;
-    if (authError || !user) return jsonResponse({ error: "Unauthorized" }, 401);
+    const authResult = await admin.auth.getUser(token);
+    // deno-lint-ignore no-explicit-any
+    const user = authResult.data.user as any;
+    const authError = authResult.error;
+    if (authError || !user) return jsonResponse({ error: `Unauthorized: ${errorMessage(authError)}` }, 401);
 
     let body: RequestBody | null;
     try {
@@ -241,7 +246,7 @@ Deno.serve(async (request) => {
     if (!body) return jsonResponse({ error: "Invalid request body" }, 400);
 
     action = typeof body.action === "string" ? body.action : "";
-
+    
     const userMetadata = (user.user_metadata ?? {}) as Record<string, unknown>;
     const metaPhone = typeof userMetadata.phone === "string" ? userMetadata.phone : "";
     const userEmail = typeof user.email === "string" ? user.email : "";
@@ -262,7 +267,7 @@ Deno.serve(async (request) => {
         .single();
 
       if (upsertResult.error || !upsertResult.data) {
-        return jsonResponse({ error: "Could not provision notification profile" }, 500);
+        return jsonResponse({ error: `Could not provision profile: ${errorMessage(upsertResult.error)}` }, 500);
       }
       sender = upsertResult.data as Sender;
     } else {
@@ -291,7 +296,7 @@ Deno.serve(async (request) => {
         is_active: true,
         updated_at: new Date().toISOString(),
       }, { onConflict: "user_id,endpoint" });
-      if (error) return jsonResponse({ error: "Could not save device subscription" }, 500);
+      if (error) return jsonResponse({ error: `Could not save subscription: ${errorMessage(error)}` }, 500);
       return jsonResponse({ success: true });
     }
 
@@ -300,7 +305,7 @@ Deno.serve(async (request) => {
         .select("id", { count: "exact", head: true })
         .eq("user_id", sender.id)
         .eq("is_active", true);
-      if (error) return jsonResponse({ error: "Could not check device subscriptions" }, 500);
+      if (error) return jsonResponse({ error: "Could not check subscriptions" }, 500);
       return jsonResponse({ count: count ?? 0 });
     }
 
@@ -309,7 +314,7 @@ Deno.serve(async (request) => {
         .select("id", { count: "exact", head: true })
         .eq("user_id", sender.id)
         .eq("is_read", false);
-      if (error) return jsonResponse({ error: "Could not load notification count" }, 500);
+      if (error) return jsonResponse({ error: "Could not load count" }, 500);
       return jsonResponse({ count: count ?? 0 });
     }
 
@@ -355,7 +360,7 @@ Deno.serve(async (request) => {
     }
 
     if (action === "send" || action === "test") {
-      const { recipients, error } = await resolveRecipients(admin, body);
+      const { recipients, error } = await resolveRecipients(admin, body, sender.id);
       if (error) return jsonResponse({ error }, 400);
       if (!recipients?.length) return jsonResponse({ success: true, delivered: 0, notificationCount: 0 });
       if (action === "test" && recipients.some((recipient) => recipient.id !== sender.id)) {
@@ -364,9 +369,10 @@ Deno.serve(async (request) => {
       return await sendNotifications(admin, sender, recipients, body);
     }
 
-    return jsonResponse({ error: "Unsupported notification action" }, 400);
+    return jsonResponse({ error: `Unsupported action: ${action}` }, 400);
   } catch (error) {
-    console.error("Push notification action failed:", { action, error: errorMessage(error) });
-    return jsonResponse({ error: "Could not complete the notification request" }, 500);
+    const errMessage = errorMessage(error);
+    console.error("Push function fatal error:", errMessage);
+    return jsonResponse({ error: `Server error: ${errMessage}` }, 500);
   }
 });
