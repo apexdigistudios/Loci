@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { supabase } from "@/lib/supabase";
-import { invokeNotificationApi } from "@/lib/notification-session";
+import { invokeNotificationApi } from "@/lib/notification-api";
 
 interface ProfilePageProps {
   fullName: string;

@@ -3,7 +3,7 @@ import webpush from "https://esm.sh/web-push@3.6.3";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-loci-session",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Content-Type": "application/json",
 };
@@ -24,14 +24,6 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
 }
 
-function isUniqueViolation(error: unknown) {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { code?: unknown; message?: unknown; details?: unknown };
-  return candidate.code === "23505" || /duplicate key|unique constraint/i.test(
-    `${String(candidate.message || "")} ${String(candidate.details || "")}`
-  );
-}
-
 function errorMessage(error: unknown) {
   if (error instanceof Error && error.message) return error.message;
   if (error && typeof error === "object" && "message" in error) {
@@ -48,84 +40,6 @@ function normalizePhone(value: string) {
 
 function normalizeEmail(value: string) {
   return value.trim().toLowerCase();
-}
-
-function toHex(bytes: Uint8Array) {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function sha256(value: string) {
-  return toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))));
-}
-
-function makeSessionToken() {
-  return toHex(crypto.getRandomValues(new Uint8Array(32)));
-}
-
-async function hashPin(pin: string) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const passwordKey = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(pin),
-    "PBKDF2",
-    false,
-    ["deriveBits"]
-  );
-  const derived = new Uint8Array(await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: 310000, hash: "SHA-256" },
-    passwordKey,
-    256
-  ));
-  return `pbkdf2$310000$${toHex(salt)}$${toHex(derived)}`;
-}
-
-async function issueSession(admin: ReturnType<typeof createClient>, userId: string) {
-  const token = makeSessionToken();
-  const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
-  const { error } = await admin.from("notification_app_sessions").insert({
-    token_hash: await sha256(token),
-    user_id: userId,
-    expires_at: expiresAt,
-  });
-  if (error) throw error;
-  await admin.from("notification_app_sessions").delete().lt("expires_at", new Date().toISOString());
-  return { token, expiresAt };
-}
-
-async function verifyPin(pin: string, storedHash: string | null) {
-  if (!storedHash) return false;
-  const [algorithm, iterationText, saltHex, expectedHex] = storedHash.split("$");
-  const iterations = Number(iterationText);
-  if (
-    algorithm !== "pbkdf2" ||
-    !/^\d+$/.test(iterationText || "") ||
-    !Number.isSafeInteger(iterations) ||
-    iterations < 100000 ||
-    iterations > 1000000 ||
-    !/^[\da-f]{32}$/i.test(saltHex || "") ||
-    !/^[\da-f]{64}$/i.test(expectedHex || "")
-  ) return false;
-
-  const passwordKey = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(pin),
-    "PBKDF2",
-    false,
-    ["deriveBits"]
-  );
-  const derived = new Uint8Array(await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      salt: new Uint8Array((saltHex.match(/.{2}/g) || []).map((pair) => Number.parseInt(pair, 16))),
-      iterations,
-      hash: "SHA-256",
-    },
-    passwordKey,
-    256
-  ));
-  const expected = new Uint8Array((expectedHex.match(/.{2}/g) || []).map((pair) => Number.parseInt(pair, 16)));
-  if (derived.length !== expected.length) return false;
-  return derived.reduce((difference, byte, index) => difference | (byte ^ expected[index]), 0) === 0;
 }
 
 async function publishNotificationChange(admin: ReturnType<typeof createClient>, userId: string) {
@@ -181,164 +95,15 @@ Deno.serve(async (req) => {
     }
     action = typeof body.action === "string" ? body.action : "";
 
-    if (action === "check_pin_status") {
-      const phone = normalizePhone(String(body.phone || ""));
-      if (!/^\+\d{8,15}$/.test(phone)) return jsonResponse({ error: "Invalid phone number" }, 400);
-      const { data, error } = await admin.from("users").select("pin_hash").eq("phone", phone).maybeSingle();
-      if (error) return jsonResponse({ error: "Could not check PIN status" }, 500);
-      return jsonResponse({ hasPin: !!data?.pin_hash });
-    }
-
-    if (action === "lookup_user") {
-      const phone = normalizePhone(String(body.phone || ""));
-      if (!/^\+\d{8,15}$/.test(phone)) return jsonResponse({ error: "Invalid phone number" }, 400);
-      const { data, error } = await admin
-        .from("users")
-        .select("id, phone, full_name, nickname, avatar_url, pin_hash")
-        .eq("phone", phone)
-        .maybeSingle();
-      if (error) return jsonResponse({ error: "Could not look up account" }, 500);
-      if (!data) return jsonResponse({ user: null });
-      return jsonResponse({ user: { id: data.id, phone: data.phone, hasPin: !!data.pin_hash } });
-    }
-
-    if (action === "lookup_referrer") {
-      const code = typeof body.code === "string" ? body.code.trim().slice(0, 120) : "";
-      if (!code) return jsonResponse({ referrer: null });
-      const query = /^\+?\d[\d\s().-]{6,18}$/.test(code)
-        ? admin.from("users").select("full_name, nickname").eq("phone", normalizePhone(code))
-        : admin.from("users").select("full_name, nickname").eq("nickname", code);
-      const { data, error } = await query.maybeSingle();
-      if (error) return jsonResponse({ error: "Could not load invitation" }, 500);
-      return jsonResponse({ referrer: data || null });
-    }
-
-    if (action === "signup") {
-      const rawPhone = typeof body.phone === "string" ? body.phone : "";
-      const phone = normalizePhone(rawPhone);
-      const fullName = typeof body.fullName === "string" ? body.fullName.trim().slice(0, 120) : "";
-      const nickname = typeof body.nickname === "string" ? body.nickname.trim().slice(0, 60) : "";
-      const avatarUrl = typeof body.avatarUrl === "string" ? body.avatarUrl.trim() : "";
-      const pin = typeof body.pin === "string" ? body.pin : "";
-      if (!/^\+\d{8,15}$/.test(phone) || !/^\d{4}$/.test(pin)) {
-        return jsonResponse({ error: "Please enter a valid phone number and four-digit PIN." }, 400);
-      }
-      if (!fullName || !nickname) {
-        return jsonResponse({ error: "Please enter your name and nickname to create an account." }, 400);
-      }
-      if (avatarUrl) {
-        try {
-          if (new URL(avatarUrl).origin !== supabaseUrl) return jsonResponse({ error: "Invalid profile image" }, 400);
-        } catch {
-          return jsonResponse({ error: "Invalid profile image" }, 400);
-        }
-      }
-
-      const { data: existingUser, error: existingError } = await admin
-        .from("users")
-        .select("id")
-        .eq("phone", phone)
-        .maybeSingle();
-      if (existingError) return jsonResponse({ error: "We couldn’t check that number. Please try again." }, 500);
-      if (existingUser) {
-        return jsonResponse({ error: "An account with this phone number already exists." }, 409);
-      }
-
-      const { data: user, error: signupError } = await admin.from("users").insert({
-        phone,
-        full_name: fullName,
-        nickname,
-        avatar_url: avatarUrl || null,
-        pin_hash: await hashPin(pin),
-      }).select("id, phone, full_name, nickname, avatar_url").single();
-      if (signupError || !user) {
-        if (isUniqueViolation(signupError)) {
-          return jsonResponse({ error: "An account with this phone number already exists." }, 409);
-        }
-        console.error("Profile signup failed:", signupError);
-        return jsonResponse({ error: "We couldn’t create your account just now. Please try again." }, 500);
-      }
-
-      const session = await issueSession(admin, user.id);
-      return jsonResponse({ user, ...session }, 201);
-    }
-
-    if (action === "login" || action === "create_session") {
-      const userId = String(body.userId || "").trim();
-      const phone = normalizePhone(String(body.phone || ""));
-      const pin = String(body.pin || "");
-      if (!UUID_PATTERN.test(userId) || !/^\+\d{8,15}$/.test(phone) || !/^\d{4}$/.test(pin)) {
-        return jsonResponse({ error: "Invalid sign-in details" }, 400);
-      }
-
-      const { data: allowed, error: attemptError } = await admin.rpc("begin_notification_pin_attempt", { p_phone: phone });
-      if (attemptError) return jsonResponse({ error: "Could not verify sign-in" }, 500);
-      if (!allowed) return jsonResponse({ error: "Too many attempts. Try again in 15 minutes." }, 429);
-
-      const { data: user, error: userError } = await admin
-        .from("users")
-        .select("id, phone, pin_hash, full_name, nickname, avatar_url")
-        .eq("id", userId)
-        .eq("phone", phone)
-        .maybeSingle();
-      if (userError) return jsonResponse({ error: "Could not verify sign-in" }, 500);
-      if (!user || !(await verifyPin(pin, user.pin_hash))) {
-        return jsonResponse({ error: "Invalid sign-in details" }, 401);
-      }
-
-      await admin.rpc("reset_notification_pin_attempt", { p_phone: phone });
-      try {
-        const issued = await issueSession(admin, user.id);
-        return jsonResponse({
-          ...issued,
-          user: {
-            id: user.id,
-            phone: user.phone,
-            full_name: user.full_name,
-            nickname: user.nickname,
-            avatar_url: user.avatar_url,
-          },
-        });
-      } catch (error) {
-        console.error("Notification session could not be issued:", error);
-        return jsonResponse({ error: "We couldn’t finish signing you in. Please try again." }, 500);
-      }
-    }
-
-    if (action === "set_pin") {
-      const phone = normalizePhone(String(body.phone || ""));
-      const pin = String(body.pin || "");
-      if (!/^\+\d{8,15}$/.test(phone) || !/^\d{4}$/.test(pin)) {
-        return jsonResponse({ error: "Please enter a valid phone number and four-digit PIN." }, 400);
-      }
-      const { data: user, error: userError } = await admin
-        .from("users")
-        .select("id, pin_hash")
-        .eq("phone", phone)
-        .maybeSingle();
-      if (userError) return jsonResponse({ error: "Could not find account" }, 500);
-      if (!user) return jsonResponse({ error: "No account was found for that number." }, 404);
-      if (!user.pin_hash) {
-        return jsonResponse({ error: "This older account needs verified recovery before a PIN can be set. Please contact support." }, 403);
-      }
-      return jsonResponse({ error: "This account already has a PIN. Sign in with it instead." }, 409);
-    }
-
-    const rawToken = req.headers.get("x-loci-session") || "";
-    if (!/^[\da-f]{64}$/i.test(rawToken)) return jsonResponse({ error: "Valid notification session required" }, 401);
-    const { data: session, error: sessionError } = await admin
-      .from("notification_app_sessions")
-      .select("user_id")
-      .eq("token_hash", await sha256(rawToken))
-      .gt("expires_at", new Date().toISOString())
-      .maybeSingle();
-    if (sessionError) return jsonResponse({ error: "Could not verify notification session" }, 500);
-    if (!session) return jsonResponse({ error: "Notification session expired" }, 401);
-
+    const authorization = req.headers.get("authorization") || "";
+    const token = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
+    if (!token) return jsonResponse({ error: "Supabase Auth session required" }, 401);
+    const { data: authData, error: authError } = await admin.auth.getUser(token);
+    if (authError || !authData.user) return jsonResponse({ error: "Invalid or expired Supabase Auth session" }, 401);
     const { data: sender, error: senderError } = await admin
       .from("users")
       .select("id, phone")
-      .eq("id", session.user_id)
+      .eq("id", authData.user.id)
       .maybeSingle();
     if (senderError || !sender) return jsonResponse({ error: "Notification profile not found" }, 401);
 
@@ -355,12 +120,6 @@ Deno.serve(async (req) => {
       const { error } = await admin.from("users").update({ avatar_url: avatarUrl }).eq("id", sender.id);
       if (error) return jsonResponse({ error: "Could not update profile image" }, 500);
       return jsonResponse({ success: true, avatarUrl });
-    }
-
-    if (action === "end_session") {
-      const { error } = await admin.from("notification_app_sessions").delete().eq("token_hash", await sha256(rawToken));
-      if (error) return jsonResponse({ error: "Could not end notification session" }, 500);
-      return jsonResponse({ success: true });
     }
 
     if (action === "subscribe") {
@@ -550,9 +309,6 @@ Deno.serve(async (req) => {
     });
   } catch (error) {
     console.error("Edge function error:", error);
-    if (action === "signup" && isUniqueViolation(error)) {
-      return jsonResponse({ error: "An account with this phone number already exists." }, 409);
-    }
     const message = errorMessage(error);
     const status = /invalid|missing|required|must be|please enter/i.test(message) ? 400 : 500;
     return jsonResponse({ error: message }, status);

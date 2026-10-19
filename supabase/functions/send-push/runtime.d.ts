@@ -12,7 +12,6 @@ declare module "https://esm.sh/@supabase/supabase-js@2" {
     sender_id: string | null;
     phone: string;
     user_phone: string;
-    pin_hash: string | null;
     full_name: string | null;
     nickname: string | null;
     avatar_url: string | null;
@@ -57,6 +56,9 @@ declare module "https://esm.sh/@supabase/supabase-js@2" {
   interface SupabaseClient {
     from<T extends DatabaseRow = DatabaseRow>(table: string): Query<T>;
     rpc(name: string, args?: Record<string, unknown>): Promise<QueryResult<boolean>>;
+    auth: {
+      getUser(token: string): Promise<{ data: { user: { id: string } | null }; error: unknown | null }>;
+    };
     channel(name: string, options?: Record<string, unknown>): BroadcastChannel;
     removeChannel(channel: BroadcastChannel): Promise<unknown>;
   }

@@ -8,7 +8,7 @@ import { cleanPhone } from "@/lib/utils";
 import { requestNotificationPermission, type NotificationPermissionResult } from "@/lib/notifications";
 import { sendPushTestNotification, subscribeUserToPush } from "@/lib/push-notifications";
 import { dispatchAlert, prepareAlertFeedback } from "@/lib/alerts";
-import { getNotificationSessionToken, invokeNotificationApi } from "@/lib/notification-session";
+import { invokeNotificationApi } from "@/lib/notification-api";
 
 import { HomePage } from "@/components/pages/home-page";
 import { SessionPage } from "@/components/pages/session-page";
@@ -141,15 +141,38 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   }, []);
 
   useEffect(() => {
-    if (!userId) return;
-    if (!getNotificationSessionToken()) {
-      onLogout();
-      return;
-    }
-    const handleExpiredSession = () => onLogout();
-    window.addEventListener("loci:notification-session-expired", handleExpiredSession);
-    return () => window.removeEventListener("loci:notification-session-expired", handleExpiredSession);
-  }, [userId, onLogout]);
+    let cancelled = false;
+    void supabase.auth.getSession().then(async ({ data: sessionData, error: sessionError }) => {
+      if (cancelled) return;
+      if (sessionError || !sessionData.session) {
+        localStorage.removeItem("loci_user_phone");
+        onLogout();
+        return;
+      }
+
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (!cancelled && (userError || !userData.user)) {
+        localStorage.removeItem("loci_user_phone");
+        onLogout();
+      }
+    });
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        localStorage.removeItem("loci_user_phone");
+        onLogout();
+      }
+    });
+    return () => {
+      cancelled = true;
+      authListener.subscription.unsubscribe();
+    };
+  }, [onLogout]);
+
+  const handleLogout = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) console.error("Failed to sign out:", error);
+    onLogout();
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -855,7 +878,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
                 triggerNotificationPrompt={triggerNotificationPrompt}
                 triggerLocationPrompt={triggerLocationPrompt}
                 onTestPush={handleTestPush}
-                onLogout={onLogout}
+                onLogout={handleLogout}
               />
             )}
 

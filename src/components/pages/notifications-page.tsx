@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { invokeNotificationApi } from "@/lib/notification-session";
+import { invokeNotificationApi } from "@/lib/notification-api";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 
 type NotificationType = "session_start" | "checkin" | "emergency" | "session_end" | "update" | "guardian_alert";

@@ -1,5 +1,5 @@
 import { normalizePhone } from "@/lib/utils";
-import { invokeNotificationApi } from "@/lib/notification-session";
+import { invokeNotificationApi } from "@/lib/notification-api";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 
 export type AlertType = "session_start" | "checkin" | "emergency" | "session_end" | "update" | "guardian_alert";

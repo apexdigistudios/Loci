@@ -1,11 +1,10 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import Link from "next/link";
-import { User, UserCheck, Phone, Lock, ArrowRight, Loader2, LogIn, ImagePlus, KeyRound, ChevronLeft, ShieldCheck } from "lucide-react";
+import { User, UserCheck, Phone, Lock, ArrowRight, Loader2, LogIn, ImagePlus, KeyRound, ChevronLeft } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { normalizePhone, isValidPhone } from "@/lib/utils";
-import { createAccount, createNotificationSession, lookupProfileByPhone, setAccountPin } from "@/lib/notification-session";
+import { getCurrentProfile, signInWithPhone, signUpWithPhone } from "@/lib/auth";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 import { SplashScreen } from "@/components/splash-screen";
 
@@ -50,12 +49,12 @@ interface AuthProfile {
   full_name: string | null;
   nickname: string | null;
   avatar_url: string | null;
-  hasPin?: boolean;
 }
 
 export function Login({ onSuccess, showSplash = true }: LoginProps) {
+  const onSuccessRef = useRef(onSuccess);
   const [isSignUp, setIsSignUp] = useState(false);
-  const [authStep, setAuthStep] = useState<"phone" | "pin" | "legacy-pin">("phone");
+  const [authStep, setAuthStep] = useState<"phone" | "password">("phone");
   const [existingProfile, setExistingProfile] = useState<AuthProfile | null>(null);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState("");
@@ -73,23 +72,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
   const [detectedCountry, setDetectedCountry] = useState<CountryInfo>(COUNTRIES[0]);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [accountNotFound, setAccountNotFound] = useState(false);
-  const [profileCheckComplete, setProfileCheckComplete] = useState(() => {
-    if (typeof window === "undefined") return true;
-
-    const savedUser = localStorage.getItem("loci_user_profile");
-    const savedPhone = localStorage.getItem("loci_saved_phone");
-
-    if (!savedUser && !savedPhone) return true;
-
-    try {
-      const cachedPhone = savedUser ? JSON.parse(savedUser).phone || "" : "";
-      return !((cachedPhone || savedPhone || "") && normalizePhone(cachedPhone || savedPhone || ""));
-    } catch {
-      localStorage.removeItem("loci_user_profile");
-      return true;
-    }
-  });
+  const [profileCheckComplete, setProfileCheckComplete] = useState(false);
   const [minimumSplashElapsed, setMinimumSplashElapsed] = useState(!showSplash);
 
   useEffect(() => {
@@ -101,6 +84,10 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
   }, [avatarPreview]);
 
   useEffect(() => {
+    onSuccessRef.current = onSuccess;
+  }, [onSuccess]);
+
+  useEffect(() => {
     if (!showSplash) return;
     const timer = window.setTimeout(() => setMinimumSplashElapsed(true), 800);
     return () => window.clearTimeout(timer);
@@ -108,47 +95,36 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
 
   useEffect(() => {
     let cancelled = false;
-    const savedUser = typeof window !== "undefined" ? localStorage.getItem("loci_user_profile") : null;
-    let cachedPhone = "";
-    if (savedUser) {
-      try {
-        cachedPhone = JSON.parse(savedUser).phone || "";
-      } catch {
-        localStorage.removeItem("loci_user_profile");
-      }
-    }
-    const savedPhone = typeof window !== "undefined" ? localStorage.getItem("loci_saved_phone") : null;
-    const phoneToVerify = normalizePhone(cachedPhone || savedPhone || "");
-
-    if (!phoneToVerify) {
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    const phoneFrameId = window.requestAnimationFrame(() => setPhone(phoneToVerify));
-    void lookupProfileByPhone(phoneToVerify)
-      .then((data) => {
+    const restoreProfile = () => {
+      void getCurrentProfile()
+      .then((profile) => {
         if (cancelled) return;
-        if (data) {
-          setExistingProfile(data);
-          setPhone(data.phone);
-          setAuthStep(data.hasPin === false ? "legacy-pin" : "pin");
-        } else {
-          localStorage.removeItem("loci_user_profile");
-          localStorage.removeItem("loci_saved_phone");
-          setPhone(phoneToVerify);
-          setAccountNotFound(true);
-          setErrorMessage("We couldn't find an account matching this number. Would you like to create a new account?");
-        }
-        setProfileCheckComplete(true);
+        if (profile) onSuccessRef.current({
+          fullName: profile.full_name || "",
+          nickname: profile.nickname || "",
+          phone: profile.phone,
+        });
       })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        console.error("Saved profile lookup failed:", error);
-        setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t check your saved number. Enter it again or try later."));
-        setProfileCheckComplete(true);
+      .catch((error: unknown) => console.error("Could not restore Supabase Auth profile:", error))
+      .finally(() => {
+        if (!cancelled) setProfileCheckComplete(true);
       });
+    };
+
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (cancelled) return;
+      if (error || !data.session) {
+        setProfileCheckComplete(true);
+        return;
+      }
+      restoreProfile();
+    });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session && (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")) {
+        queueMicrotask(restoreProfile);
+      }
+    });
 
     const countryFrameId = window.requestAnimationFrame(() => {
       try {
@@ -169,14 +145,13 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
 
     return () => {
       cancelled = true;
-      window.cancelAnimationFrame(phoneFrameId);
       window.cancelAnimationFrame(countryFrameId);
+      authListener.subscription.unsubscribe();
     };
   }, []);
 
   const resetFormState = () => {
     setErrorMessage(null);
-    setAccountNotFound(false);
     setFullName("");
     setNickname("");
     setPin("");
@@ -193,7 +168,6 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     const val = e.target.value;
     setPhone(val);
     setErrorMessage(null);
-    setAccountNotFound(false);
 
     const cleanVal = val.trim();
     if (!cleanVal) return;
@@ -222,7 +196,6 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     if (loading) return;
 
     setErrorMessage(null);
-    setAccountNotFound(false);
     const formattedPhone = formatPhoneNumber(phone);
 
     if (!isValidPhone(formattedPhone)) {
@@ -230,34 +203,13 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       return;
     }
 
-    setLoading(true);
-
-    try {
-      const data = await lookupProfileByPhone(formattedPhone);
-
-      if (!data) {
-        setExistingProfile(null);
-        setAuthStep("phone");
-        setPin("");
-        setConfirmPin("");
-        setPhone(formattedPhone);
-        setAccountNotFound(true);
-        setErrorMessage("We couldn't find an account matching this number. Would you like to create a new account?");
-        setLoading(false);
-        return;
-      }
-
-      setExistingProfile(data);
-      setPhone(data.phone);
-      setAuthStep(data.hasPin === false ? "legacy-pin" : "pin");
-    } catch (error) {
-      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t sign you in just now. Check your connection and try again."));
-    } finally {
-      setLoading(false);
-    }
+    setPhone(formattedPhone);
+    setExistingProfile({ id: "", phone: formattedPhone, full_name: null, nickname: null, avatar_url: null });
+    setLoginPin("");
+    setAuthStep("password");
   };
 
-  const handlePinLogin = async (event: React.FormEvent) => {
+  const handlePasswordLogin = async (event: React.FormEvent) => {
     event.preventDefault();
     if (loading) return;
     if (!existingProfile || !/^\d{4}$/.test(loginPin)) return;
@@ -266,7 +218,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     setErrorMessage(null);
 
     try {
-      const verifiedProfile = await createNotificationSession(existingProfile.id, existingProfile.phone, loginPin);
+      const verifiedProfile = await signInWithPhone(existingProfile.phone, loginPin);
 
       const userData: UserData = {
         fullName: verifiedProfile.full_name || "",
@@ -274,53 +226,9 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
         phone: verifiedProfile.phone,
       };
 
-      if (typeof window !== "undefined") {
-        localStorage.setItem("loci_user_profile", JSON.stringify(userData));
-        localStorage.setItem("loci_saved_phone", verifiedProfile.phone);
-      }
-
-      onSuccess(userData);
+      onSuccessRef.current(userData);
     } catch (error) {
-      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t verify that PIN just now. Please try again."));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleLegacyPinSetup = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (loading) return;
-    if (!existingProfile?.phone) return;
-
-    if (!/^\d{4}$/.test(pin) || !/^\d{4}$/.test(confirmPin)) {
-      setErrorMessage("Enter and confirm a 4-digit Security PIN.");
-      return;
-    }
-    if (pin !== confirmPin) {
-      setErrorMessage("PINs do not match. Please try again.");
-      return;
-    }
-
-    setLoading(true);
-    setErrorMessage(null);
-
-    try {
-      await setAccountPin(existingProfile.phone, pin);
-
-      const userData: UserData = {
-        fullName: existingProfile.full_name || "",
-        nickname: existingProfile.nickname || "",
-        phone: existingProfile.phone,
-      };
-
-      if (typeof window !== "undefined") {
-        localStorage.setItem("loci_user_profile", JSON.stringify(userData));
-        localStorage.setItem("loci_saved_phone", existingProfile.phone);
-      }
-
-      onSuccess(userData);
-    } catch (error) {
-      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t save your PIN just now. Please try again."));
+      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t sign you in. Check your PIN and try again."));
     } finally {
       setLoading(false);
     }
@@ -340,7 +248,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       return;
     }
     if (!/^\d{4}$/.test(pin) || !/^\d{4}$/.test(confirmPin)) {
-      setErrorMessage("Enter and confirm a 4-digit Security PIN.");
+      setErrorMessage("Enter and confirm a 4-digit PIN.");
       return;
     }
     if (pin !== confirmPin) {
@@ -372,7 +280,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
 
       avatarBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
 
-      const savedProfile = await createAccount({
+      const savedProfile = await signUpWithPhone({
         fullName: trimmedFullName,
         nickname: trimmedNickname,
         phone: formattedPhone,
@@ -421,12 +329,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
         phone: savedProfile.phone,
       };
 
-      if (typeof window !== "undefined") {
-        localStorage.setItem("loci_user_profile", JSON.stringify(userData));
-        localStorage.setItem("loci_saved_phone", savedProfile.phone);
-      }
-
-      onSuccess(userData);
+      onSuccessRef.current(userData);
     } catch (err) {
       console.error("Profile registration failed:", err);
       setErrorMessage(getFriendlyErrorMessage(err, "We couldn’t create your account just now. Check your details and try again."));
@@ -448,7 +351,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
           {isSignUp ? "Create Your Déloci Profile" : "Welcome Back"}
         </h1>
         <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1.5 leading-relaxed">
-          {isSignUp ? "Set up your identity before starting safety check-ins." : "Enter your phone number to sign in instantly."}
+          {isSignUp ? "Set up your identity before starting safety check-ins." : "Sign in securely with your phone number and password."}
         </p>
       </div>
 
@@ -530,7 +433,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
 
           <div>
             <label htmlFor="pin-input" className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
-              4-Digit Security PIN
+              4-Digit PIN
             </label>
             <div className="relative flex items-center">
               <Lock className="w-4 h-4 absolute left-4 text-zinc-400" />
@@ -539,7 +442,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
                 type="password"
                 required
                 inputMode="numeric"
-                autoComplete="one-time-code"
+                autoComplete="new-password"
                 pattern="[0-9]{4}"
                 maxLength={4}
                 disabled={loading}
@@ -553,7 +456,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
 
           <div>
             <label htmlFor="confirm-pin-input" className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
-              Confirm Security PIN
+              Confirm PIN
             </label>
             <div className="relative flex items-center">
               <Lock className="w-4 h-4 absolute left-4 text-zinc-400" />
@@ -562,7 +465,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
                 type="password"
                 required
                 inputMode="numeric"
-                autoComplete="one-time-code"
+                autoComplete="new-password"
                 pattern="[0-9]{4}"
                 maxLength={4}
                 disabled={loading}
@@ -617,94 +520,8 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
             )}
           </button>
         </form>
-      ) : authStep === "legacy-pin" && existingProfile ? (
-        <form onSubmit={handleLegacyPinSetup} className="my-auto py-4 space-y-4">
-          {errorMessage && (
-            <div role="alert" className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
-              {errorMessage}
-              {errorMessage.includes("verify that you own this phone") && (
-                <Link href="/contact" className="mt-2 block font-bold underline underline-offset-2">Contact support</Link>
-              )}
-            </div>
-          )}
-          <div className="flex flex-col items-center gap-3 py-3">
-            <div className="h-20 w-20 overflow-hidden rounded-full border-2 border-yellow-400 bg-zinc-100 dark:bg-zinc-900 flex items-center justify-center text-xl font-black text-yellow-500">
-              {existingProfile.avatar_url ? (
-                <img src={existingProfile.avatar_url} alt="Profile avatar" className="h-full w-full object-cover" />
-              ) : (
-                (existingProfile.nickname || existingProfile.full_name || "U").slice(0, 2)
-              )}
-            </div>
-            <div className="text-center">
-              <p className="text-base font-extrabold text-black dark:text-white">{existingProfile.nickname || existingProfile.full_name}</p>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">Welcome Back! Set Your 4-Digit Security PIN</p>
-            </div>
-          </div>
-          <div className="space-y-4">
-            <div className="relative flex items-center">
-              <Lock className="w-4 h-4 absolute left-4 text-zinc-400" />
-              <input
-                id="legacy-pin-input"
-                type="password"
-                required
-                autoFocus
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9]{4}"
-                maxLength={4}
-                disabled={loading}
-                value={pin}
-                onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 4))}
-                placeholder="••••"
-                className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm tracking-[0.5em] text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
-              />
-            </div>
-            <div className="relative flex items-center">
-              <Lock className="w-4 h-4 absolute left-4 text-zinc-400" />
-              <input
-                id="confirm-legacy-pin-input"
-                type="password"
-                required
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                pattern="[0-9]{4}"
-                maxLength={4}
-                disabled={loading}
-                value={confirmPin}
-                onChange={(event) => setConfirmPin(event.target.value.replace(/\D/g, "").slice(0, 4))}
-                placeholder="Confirm PIN"
-                className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-sm tracking-[0.5em] text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
-              />
-            </div>
-          </div>
-          <button
-            type="submit"
-            disabled={loading || pin.length !== 4 || confirmPin.length !== 4}
-            className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50"
-          >
-            {loading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <>
-                <ShieldCheck className="w-4 h-4" />
-                <span>Save Security PIN</span>
-              </>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setAuthStep("phone");
-              setExistingProfile(null);
-              resetFormState();
-            }}
-            className="w-full flex items-center justify-center gap-1.5 py-2 text-xs font-bold text-zinc-500 hover:text-black dark:hover:text-white"
-          >
-            <ChevronLeft className="h-4 w-4" /> Use a different phone number
-          </button>
-        </form>
-      ) : authStep === "pin" && existingProfile ? (
-        <form onSubmit={handlePinLogin} className="my-auto py-4 space-y-4">
+      ) : authStep === "password" && existingProfile ? (
+        <form onSubmit={handlePasswordLogin} className="my-auto py-4 space-y-4">
           {errorMessage && (
             <div role="alert" className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
               {errorMessage}
@@ -720,7 +537,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
             </div>
             <div className="text-center">
               <p className="text-base font-extrabold text-black dark:text-white">{existingProfile.nickname || existingProfile.full_name}</p>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">Enter 4-Digit Security PIN</p>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">Sign in to {existingProfile.phone} with your PIN</p>
             </div>
           </div>
           <div className="relative flex items-center">
@@ -731,14 +548,14 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
               required
               autoFocus
               inputMode="numeric"
-              autoComplete="one-time-code"
+              autoComplete="current-password"
               pattern="[0-9]{4}"
               maxLength={4}
               disabled={loading}
               value={loginPin}
               onChange={(event) => setLoginPin(event.target.value.replace(/\D/g, "").slice(0, 4))}
               placeholder="••••"
-              aria-label="4-digit Security PIN"
+              aria-label="4-digit PIN"
               className="w-full bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl pl-11 pr-4 py-3 text-center text-lg tracking-[0.6em] text-black dark:text-white focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 transition-all disabled:opacity-50"
             />
           </div>
@@ -752,7 +569,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
             ) : (
               <>
                 <LogIn className="w-4 h-4" />
-                <span>Unlock Déloci</span>
+                <span>Sign In</span>
               </>
             )}
           </button>
@@ -818,29 +635,15 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
               </>
             )}
           </button>
-          {accountNotFound && (
-            <button
-              type="button"
-              onClick={() => {
-                setIsSignUp(true);
-                setAccountNotFound(false);
-                setErrorMessage(null);
-              }}
-              className="w-full min-h-11 rounded-xl border border-yellow-500/50 px-4 py-2.5 text-sm font-bold text-zinc-900 transition-colors hover:bg-yellow-400/15 dark:text-white"
-            >
-              Create a new account
-            </button>
-          )}
         </form>
       )}
 
-      {authStep !== "pin" && (
+      {authStep === "phone" && (
         <div className="text-center pt-2">
           <button
             type="button"
             onClick={() => {
               resetFormState();
-              setAccountNotFound(false);
               setIsSignUp(!isSignUp);
             }}
             className="text-xs font-bold text-zinc-500 hover:text-black dark:hover:text-white transition-colors"

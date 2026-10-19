@@ -1,4 +1,4 @@
-import { invokeNotificationApi } from "@/lib/notification-session";
+import { invokeNotificationApi } from "@/lib/notification-api";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 
 function urlBase64ToUint8Array(base64String: string) {

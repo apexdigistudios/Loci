@@ -4,7 +4,7 @@ import React, { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Shield, ArrowRight, UserCheck } from "lucide-react";
 import Link from "next/link";
-import { lookupReferrer } from "@/lib/notification-session";
+import { lookupReferrer } from "@/lib/auth";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 function JoinContent() {
