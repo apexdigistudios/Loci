@@ -1,4 +1,3 @@
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import webpush from "https://esm.sh/web-push@3.6.3";
 
@@ -156,7 +155,7 @@ async function publishNotificationChange(admin: ReturnType<typeof createClient>,
   }
 }
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   let action = "";
   try {
     if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -366,6 +365,9 @@ serve(async (req) => {
 
     if (action === "subscribe") {
       const { endpoint, p256dh, auth, deviceInfo } = body;
+      if (typeof endpoint !== "string" || typeof p256dh !== "string" || typeof auth !== "string") {
+        return jsonResponse({ error: "Invalid push subscription" }, 400);
+      }
       let endpointUrl: URL;
       try {
         endpointUrl = new URL(endpoint);
@@ -529,7 +531,10 @@ serve(async (req) => {
           keys: { p256dh: subscription.p256dh, auth: subscription.auth },
         }, payload, pushOptions);
       } catch (error) {
-        if (error.statusCode === 404 || error.statusCode === 410) {
+        const statusCode = error && typeof error === "object" && "statusCode" in error
+          ? error.statusCode
+          : undefined;
+        if (statusCode === 404 || statusCode === 410) {
           await admin.from("user_push_subscriptions").update({ is_active: false }).eq("id", subscription.id);
         }
         throw error;

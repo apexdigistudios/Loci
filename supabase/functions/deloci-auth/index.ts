@@ -1,4 +1,3 @@
-import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -17,7 +16,13 @@ async function sha256Hex(value: string) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-serve(async (req) => {
+function readStringProperty(value: unknown, property: string): string | null {
+  if (typeof value !== "object" || value === null || !(property in value)) return null;
+  const propertyValue = (value as Record<string, unknown>)[property];
+  return typeof propertyValue === "string" ? propertyValue : null;
+}
+
+Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -53,20 +58,24 @@ serve(async (req) => {
       const email = body.email || null;
       const avatarUrl = body.avatarUrl || body.avatar_url || null;
 
-      const { data: existingUser } = await admin
+      const { data: existingUser, error: lookupError } = await admin
         .from("users")
         .select("id")
         .eq("phone", phone)
         .maybeSingle();
+      if (lookupError) throw lookupError;
 
       let userId: string;
 
       if (existingUser) {
-        userId = existingUser.id;
-        await admin
+        const existingUserId = readStringProperty(existingUser, "id");
+        if (!existingUserId) throw new Error("User lookup returned an invalid ID");
+        userId = existingUserId;
+        const { error: updateError } = await admin
           .from("users")
           .update({ pin_hash: pinHash, full_name: fullName, nickname, email, avatar_url: avatarUrl })
           .eq("id", userId);
+        if (updateError) throw updateError;
       } else {
         const { data: newUser, error: insertError } = await admin
           .from("users")
@@ -75,7 +84,9 @@ serve(async (req) => {
           .single();
 
         if (insertError) throw insertError;
-        userId = newUser.id;
+        const newUserId = readStringProperty(newUser, "id");
+        if (!newUserId) throw new Error("User creation returned an invalid ID");
+        userId = newUserId;
       }
 
       // Generate App Session
