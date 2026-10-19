@@ -14,6 +14,7 @@ export interface PhoneAuthInput {
   fullName: string;
   nickname: string;
   pin: string;
+  referrerCode?: string | null;
 }
 
 export function proxyEmailForPhone(phone: string) {
@@ -49,6 +50,7 @@ export async function signUpWithPhone(input: PhoneAuthInput): Promise<PublicProf
         full_name: input.fullName.trim(),
         nickname: input.nickname.trim(),
         phone,
+        ...(input.referrerCode ? { referrer_code: input.referrerCode.trim().slice(0, 120) } : {}),
       },
     },
   });

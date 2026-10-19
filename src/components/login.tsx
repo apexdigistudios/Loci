@@ -75,6 +75,15 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [profileCheckComplete, setProfileCheckComplete] = useState(false);
   const [minimumSplashElapsed, setMinimumSplashElapsed] = useState(!showSplash);
+  const [referrerCode] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const params = new URLSearchParams(window.location.search);
+    const urlReferrer = params.get("ref") || params.get("referrer") || params.get("referrer_phone") || params.get("referrer_id");
+    const storedReferrer = localStorage.getItem("loci_referral_code");
+    const capturedReferrer = (urlReferrer || storedReferrer || "").trim().slice(0, 120);
+    if (capturedReferrer) localStorage.setItem("loci_referral_code", capturedReferrer);
+    return capturedReferrer || null;
+  });
 
   useEffect(() => {
     return () => {
@@ -312,6 +321,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
         nickname: trimmedNickname,
         phone: formattedPhone,
         pin,
+        referrerCode,
       });
 
       if (avatarBlob) {
@@ -335,19 +345,8 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
         }
       }
 
-      if (typeof window !== "undefined") {
-        const referrerNickname = localStorage.getItem("loci_referrer_nickname");
-        if (referrerNickname) {
-          try {
-            await supabase.rpc("handle_referral_signup", {
-              p_referrer_phone: referrerNickname,
-              p_new_user_phone: formattedPhone,
-            });
-            localStorage.removeItem("loci_referrer_nickname");
-          } catch (refErr) {
-            console.error("Referral linking failed:", refErr);
-          }
-        }
+      if (typeof window !== "undefined" && referrerCode) {
+        localStorage.removeItem("loci_referral_code");
       }
 
       const userData: UserData = {

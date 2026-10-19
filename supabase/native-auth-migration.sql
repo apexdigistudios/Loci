@@ -3,6 +3,12 @@
 
 create extension if not exists pgcrypto with schema extensions;
 
+create table if not exists public.referrals (
+  referrer_phone text not null references public.users(phone) on delete cascade,
+  referred_phone text not null unique references public.users(phone) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
 -- Keep existing child records attached when a phone-based profile adopts its Auth UUID.
 do $$
 declare
@@ -40,6 +46,8 @@ declare
   clean_phone text;
   profile_name text;
   profile_nickname text;
+  referrer_code text;
+  normalized_referrer_phone text;
 begin
   clean_digits := regexp_replace(coalesce(new.raw_user_meta_data ->> 'phone', ''), '\D', '', 'g');
   if length(clean_digits) < 8 or length(clean_digits) > 15 then
@@ -65,6 +73,41 @@ begin
     select 1 from public.users as app_user where app_user.id = new.id and app_user.phone = clean_phone
   ) then
     raise exception 'This phone number is already linked to another account';
+  end if;
+
+  referrer_code := nullif(left(btrim(coalesce(new.raw_user_meta_data ->> 'referrer_code', '')), 120), '');
+  if referrer_code is not null then
+    normalized_referrer_phone := '+' || regexp_replace(referrer_code, '\D', '', 'g');
+
+    insert into public.referrals (referrer_phone, referred_phone)
+    select referrer.phone, clean_phone
+      from public.users as referrer
+     where referrer.id <> new.id
+       and (
+         referrer.id = case
+           when referrer_code ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+             then referrer_code::uuid
+           else null
+         end
+         or referrer.phone = normalized_referrer_phone
+         or lower(referrer.nickname) = lower(referrer_code)
+       )
+       and not exists (
+         select 1 from public.referrals as existing_referral
+          where existing_referral.referrer_phone = referrer.phone
+            and existing_referral.referred_phone = clean_phone
+       )
+     order by case
+       when referrer.id = case
+         when referrer_code ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+           then referrer_code::uuid
+         else null
+       end then 0
+       when referrer.phone = normalized_referrer_phone then 1
+       else 2
+     end
+     limit 1
+    on conflict do nothing;
   end if;
   return new;
 end;
@@ -226,6 +269,7 @@ alter table public.checkin_sessions enable row level security;
 alter table public.session_recipients enable row level security;
 alter table public.notifications enable row level security;
 alter table public.user_push_subscriptions enable row level security;
+alter table public.referrals enable row level security;
 
 revoke all on table public.users from public, anon, authenticated;
 revoke all on table public.trusted_contacts from public, anon, authenticated;
@@ -233,6 +277,7 @@ revoke all on table public.checkin_sessions from public, anon, authenticated;
 revoke all on table public.session_recipients from public, anon, authenticated;
 revoke all on table public.notifications from public, anon, authenticated;
 revoke all on table public.user_push_subscriptions from public, anon, authenticated;
+revoke all on table public.referrals from public, anon, authenticated;
 grant select (id, phone, full_name, nickname, email, avatar_url, created_at) on table public.users to authenticated;
 grant update (full_name, nickname, email, avatar_url) on table public.users to authenticated;
 grant select, insert, update, delete on table public.trusted_contacts to authenticated;
@@ -240,6 +285,7 @@ grant select, insert, update, delete on table public.checkin_sessions to authent
 grant select, insert, update, delete on table public.session_recipients to authenticated;
 grant select, insert, update, delete on table public.notifications to authenticated;
 grant select, insert, update, delete on table public.user_push_subscriptions to authenticated;
+grant select on table public.referrals to authenticated;
 
 create policy users_select_self on public.users for select to authenticated using (id = auth.uid());
 create policy users_select_trusted_contacts on public.users for select to authenticated using (public.auth_is_trusted_contact(phone));
@@ -275,6 +321,10 @@ create policy user_push_subscriptions_select_owner on public.user_push_subscript
 create policy user_push_subscriptions_insert_owner on public.user_push_subscriptions for insert to authenticated with check (user_id = auth.uid());
 create policy user_push_subscriptions_update_owner on public.user_push_subscriptions for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
 create policy user_push_subscriptions_delete_owner on public.user_push_subscriptions for delete to authenticated using (user_id = auth.uid());
+
+drop policy if exists referrals_select_referrer on public.referrals;
+create policy referrals_select_referrer on public.referrals for select to authenticated
+  using (referrer_phone = public.auth_user_phone());
 
 -- The push Edge Function uses its service-role client; these tables no longer participate in user auth.
 drop table if exists public.notification_app_sessions;
