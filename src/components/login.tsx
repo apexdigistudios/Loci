@@ -53,7 +53,8 @@ interface AuthProfile {
 
 export function Login({ onSuccess, showSplash = true }: LoginProps) {
   const onSuccessRef = useRef(onSuccess);
-  const [isSignUp, setIsSignUp] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(true);
+  const [signupStep, setSignupStep] = useState<1 | 2>(1);
   const [authStep, setAuthStep] = useState<"phone" | "password">("phone");
   const [existingProfile, setExistingProfile] = useState<AuthProfile | null>(null);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
@@ -152,6 +153,7 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
 
   const resetFormState = () => {
     setErrorMessage(null);
+    setSignupStep(1);
     setFullName("");
     setNickname("");
     setPin("");
@@ -189,6 +191,30 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       cleaned = `${detectedCountry.prefix}${digitsOnly}`;
     }
     return normalizePhone(cleaned);
+  };
+
+  const handleSignupNext = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (loading) return;
+
+    const trimmedFullName = fullName.trim();
+    const trimmedNickname = nickname.trim();
+    const formattedPhone = formatPhoneNumber(phone);
+
+    if (!trimmedFullName || trimmedFullName.length > 120 || !trimmedNickname || trimmedNickname.length > 60) {
+      setErrorMessage("Enter a full name (up to 120 characters) and nickname (up to 60 characters).");
+      return;
+    }
+    if (!isValidPhone(formattedPhone)) {
+      setErrorMessage("Enter a complete phone number with its country code, such as +1 or +44.");
+      return;
+    }
+
+    setFullName(trimmedFullName);
+    setNickname(trimmedNickname);
+    setPhone(formattedPhone);
+    setErrorMessage(null);
+    setSignupStep(2);
   };
 
   const handlePhoneLogin = async (e: React.FormEvent) => {
@@ -244,7 +270,8 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
     const formattedPhone = formatPhoneNumber(phone);
 
     if (!trimmedFullName || !trimmedNickname || !isValidPhone(formattedPhone)) {
-      setErrorMessage("Please fill in all required fields accurately.");
+      setErrorMessage("Please return to Step 1 and complete your name, nickname, and phone number.");
+      setSignupStep(1);
       return;
     }
     if (!/^\d{4}$/.test(pin) || !/^\d{4}$/.test(confirmPin)) {
@@ -356,13 +383,15 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
       </div>
 
       {isSignUp ? (
-        <form onSubmit={handleSignUpSubmit} className="my-auto py-4 space-y-4">
+        <form onSubmit={signupStep === 1 ? handleSignupNext : handleSignUpSubmit} className="my-auto py-4 space-y-4">
           {errorMessage && (
             <div role="alert" className="p-3 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl">
               {errorMessage}
             </div>
           )}
 
+          {signupStep === 2 && (
+            <>
           <input
             ref={avatarInputRef}
             id="avatar-upload"
@@ -394,7 +423,11 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
               <span className="block text-[10px] text-zinc-500">{avatarFile ? avatarFile.name : "Choose an image to continue"}</span>
             </span>
           </button>
+            </>
+          )}
 
+          {signupStep === 1 && (
+            <>
           <div>
             <label htmlFor="full-name-input" className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
               Full Name
@@ -430,7 +463,11 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
               />
             </div>
           </div>
+            </>
+          )}
 
+          {signupStep === 2 && (
+            <>
           <div>
             <label htmlFor="pin-input" className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 mb-1">
               4-Digit PIN
@@ -476,7 +513,11 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
               />
             </div>
           </div>
+            </>
+          )}
 
+          {signupStep === 1 && (
+            <>
           <div>
             <div className="flex items-center justify-between mb-1">
               <label htmlFor="signup-phone-input" className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
@@ -504,21 +545,37 @@ export function Login({ onSuccess, showSplash = true }: LoginProps) {
               />
             </div>
           </div>
+            </>
+          )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50 mt-2"
-          >
-            {loading ? (
-              <Loader2 className="w-4 h-4 animate-spin text-black" />
-            ) : (
-              <>
-                <span>Save Profile &amp; Continue</span>
-                <ArrowRight className="w-4 h-4 text-black" />
-              </>
-            )}
-          </button>
+          {signupStep === 1 ? (
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center space-x-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50 mt-2"
+            >
+              <span>Next</span>
+              <ArrowRight className="w-4 h-4 text-black" />
+            </button>
+          ) : (
+            <div className="flex gap-3 mt-2">
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() => setSignupStep(1)}
+                className="flex-1 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 font-bold py-3.5 rounded-xl text-sm transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-900 disabled:opacity-50"
+              >
+                Back
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center gap-2 active:scale-[0.98] shadow-md shadow-yellow-400/20 disabled:opacity-50"
+              >
+                {loading ? <Loader2 className="w-4 h-4 animate-spin text-black" /> : <span>Create Account</span>}
+              </button>
+            </div>
+          )}
         </form>
       ) : authStep === "password" && existingProfile ? (
         <form onSubmit={handlePasswordLogin} className="my-auto py-4 space-y-4">

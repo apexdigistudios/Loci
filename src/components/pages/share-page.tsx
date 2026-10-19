@@ -18,6 +18,7 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
   const [copied, setCopied] = useState(false);
   const [referrals, setReferrals] = useState<ReferredUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [referralError, setReferralError] = useState("");
 
   const refCode = nickname || userPhone;
 
@@ -28,39 +29,53 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
   const shareText = "Join me on Déloci so we can watch over each other when walking home safely:";
 
   useEffect(() => {
-    let isMounted = true;
+    let cancelled = false;
 
     async function fetchReferralStats() {
-      if (!refCode) {
-        setLoading(false);
-        return;
-      }
-
       try {
+        const { data: authData, error: authError } = await supabase.auth.getUser();
+        if (authError) throw authError;
+        if (!authData.user) {
+          if (!cancelled) {
+            setReferrals([]);
+            setReferralError("Sign in to view your referral activity.");
+          }
+          return;
+        }
+
+        const { data: profile, error: profileError } = await supabase
+          .from("users")
+          .select("phone")
+          .eq("id", authData.user.id)
+          .single();
+        if (profileError) throw profileError;
+
         const { data, error } = await supabase
           .from("referrals")
           .select("referred_phone, created_at")
-          .eq("referrer_phone", refCode)
+          .eq("referrer_phone", profile.phone)
           .order("created_at", { ascending: false });
 
         if (error) throw error;
 
-        if (isMounted && data) {
+        if (!cancelled && data) {
           setReferrals(data as ReferredUser[]);
+          setReferralError("");
         }
       } catch (err) {
         console.error("Failed to load referral stats:", err);
+        if (!cancelled) setReferralError("Referral activity could not be loaded right now.");
       } finally {
-        if (isMounted) setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
-    fetchReferralStats();
+    void fetchReferralStats();
 
     return () => {
-      isMounted = false;
+      cancelled = true;
     };
-  }, [refCode]);
+  }, []);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(shareUrl);
@@ -136,6 +151,10 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
 
         {loading ? (
           <div className="text-xs text-zinc-400 py-4 text-center">Loading network activity...</div>
+        ) : referralError ? (
+          <div role="status" className="p-5 rounded-2xl border border-dashed border-zinc-300 dark:border-zinc-800 text-center">
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">{referralError}</p>
+          </div>
         ) : referrals.length === 0 ? (
           <div className="p-5 rounded-2xl border border-dashed border-zinc-300 dark:border-zinc-800 text-center">
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
