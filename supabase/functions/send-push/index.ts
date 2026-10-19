@@ -95,15 +95,18 @@ Deno.serve(async (req) => {
     }
     action = typeof body.action === "string" ? body.action : "";
 
-    const authorization = req.headers.get("authorization") || "";
-    const token = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
-    if (!token) return jsonResponse({ error: "Supabase Auth session required" }, 401);
-    const { data: authData, error: authError } = await admin.auth.getUser(token);
-    if (authError || !authData.user) return jsonResponse({ error: "Invalid or expired Supabase Auth session" }, 401);
+    const authHeader = req.headers.get("Authorization");
+    const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
+    if (!token || token === authHeader) {
+      return jsonResponse({ error: "Unauthorized" }, 401);
+    }
+
+    const { data: { user }, error: authError } = await admin.auth.getUser(token);
+    if (authError || !user) return jsonResponse({ error: "Unauthorized" }, 401);
     const { data: sender, error: senderError } = await admin
       .from("users")
       .select("id, phone")
-      .eq("id", authData.user.id)
+      .eq("id", user.id)
       .maybeSingle();
     if (senderError || !sender) return jsonResponse({ error: "Notification profile not found" }, 401);
 
