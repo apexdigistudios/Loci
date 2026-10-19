@@ -12,7 +12,10 @@ function JoinContent() {
   const router = useRouter();
   const refCode = searchParams.get("ref");
   
-  const [referrerName, setReferrerName] = useState<string | null>(null);
+  const [referrer, setReferrer] = useState<{
+    name: string;
+    avatarUrl: string | null;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -24,10 +27,13 @@ function JoinContent() {
 
       try {
         const referrer = await lookupReferrer(refCode);
-        setReferrerName(referrer?.nickname || referrer?.full_name || refCode);
+        setReferrer(referrer ? {
+          name: referrer.nickname || referrer.full_name || refCode,
+          avatarUrl: referrer.avatar_url,
+        } : { name: refCode, avatarUrl: null });
       } catch (err) {
         console.error("Error fetching inviter info:", err);
-        setReferrerName(refCode);
+        setReferrer({ name: refCode, avatarUrl: null });
       } finally {
         setLoading(false);
       }
@@ -83,12 +89,27 @@ function JoinContent() {
 
               <div className="space-y-2">
                 <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-black dark:text-white leading-tight">
-                  Join {loading ? "..." : referrerName ? referrerName : "Your Friend"} on Déloci 🛡️
+                  Join Déloci 🛡️
                 </h1>
                 <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed">
                   Accept this invitation to automatically link your safety circle and watch over each other safely during travel and walks home.
                 </p>
               </div>
+
+              {refCode && (
+                <div className="flex items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900" aria-live="polite">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                    {!loading && referrer?.avatarUrl ? (
+                      <img src={referrer.avatarUrl} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <UserCheck className="h-5 w-5" aria-hidden="true" />
+                    )}
+                  </div>
+                  <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
+                    {loading ? "Checking your invitation..." : `You were invited by ${referrer?.name || "a friend"}`}
+                  </p>
+                </div>
+              )}
 
               <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 flex items-center space-x-3 shadow-xs">
                 <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">

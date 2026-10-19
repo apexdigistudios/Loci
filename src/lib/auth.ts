@@ -82,11 +82,19 @@ export async function getCurrentProfile(): Promise<PublicProfile | null> {
   return getProfileForAuthUser(data.user);
 }
 
-export async function lookupReferrer(code: string): Promise<{ full_name: string | null; nickname: string | null } | null> {
+export async function lookupReferrer(code: string): Promise<{
+  full_name: string | null;
+  nickname: string | null;
+  avatar_url: string | null;
+} | null> {
   const { data, error } = await supabase.rpc("lookup_referrer", { ref_code: code.trim().slice(0, 120) });
   if (error) throw error;
   const result = Array.isArray(data) ? data[0] : data;
   return result && typeof result === "object"
-    ? { full_name: result.full_name ?? null, nickname: result.nickname ?? null }
+    ? {
+        full_name: result.full_name ?? null,
+        nickname: result.nickname ?? null,
+        avatar_url: result.avatar_url ?? null,
+      }
     : null;
 }

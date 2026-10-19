@@ -252,14 +252,15 @@ as $$
   );
 $$;
 
-create or replace function public.lookup_referrer(ref_code text)
-returns table (full_name text, nickname text)
+drop function if exists public.lookup_referrer(text);
+create function public.lookup_referrer(ref_code text)
+returns table (full_name text, nickname text, avatar_url text)
 language sql
 stable
 security definer
 set search_path = pg_catalog, public
 as $$
-  select app_user.full_name, app_user.nickname
+  select app_user.full_name, app_user.nickname, app_user.avatar_url
     from public.users as app_user
    where app_user.nickname = left(btrim(ref_code), 120)
       or app_user.phone = '+' || regexp_replace(coalesce(ref_code, ''), '\D', '', 'g')

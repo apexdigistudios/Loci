@@ -12,8 +12,10 @@ interface SharePageProps {
 interface ReferredUser {
   referred_phone: string;
   created_at: string;
-  nickname: string | null;
-  full_name: string | null;
+  users: Array<{
+    nickname: string | null;
+    full_name: string | null;
+  }>;
 }
 
 export function SharePage({ nickname, userPhone }: SharePageProps) {
@@ -54,31 +56,14 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
 
         const { data, error } = await supabase
           .from("referrals")
-          .select("referred_phone, created_at")
+          .select("created_at, referred_phone, users!referrals_referred_phone_fkey(nickname, full_name)")
           .eq("referrer_phone", profile.phone)
           .order("created_at", { ascending: false });
 
         if (error) throw error;
 
         if (!cancelled && data) {
-          const referredPhones = data.map((referral) => referral.referred_phone);
-          const { data: profiles, error: profilesError } = referredPhones.length
-            ? await supabase
-                .from("users")
-                .select("phone, nickname, full_name")
-                .in("phone", referredPhones)
-            : { data: [], error: null };
-          if (profilesError) throw profilesError;
-
-          const profileByPhone = new Map((profiles ?? []).map((profile) => [profile.phone, profile]));
-          setReferrals(data.map((referral) => {
-            const profile = profileByPhone.get(referral.referred_phone);
-            return {
-              ...referral,
-              nickname: profile?.nickname ?? null,
-              full_name: profile?.full_name ?? null,
-            };
-          }));
+          setReferrals(data as ReferredUser[]);
           setReferralError("");
         }
       } catch (err) {
@@ -189,7 +174,7 @@ export function SharePage({ nickname, userPhone }: SharePageProps) {
               >
                 <div>
                   <p className="font-semibold text-black dark:text-white">
-                    {item.nickname || item.full_name || "Déloci member"}
+                    {item.users[0]?.nickname || item.users[0]?.full_name || "Déloci member"}
                   </p>
                   <p className="text-[10px] text-zinc-400 mt-0.5">
                     Joined {new Date(item.created_at).toLocaleDateString()}
