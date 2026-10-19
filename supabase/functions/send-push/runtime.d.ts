@@ -46,7 +46,7 @@ declare module "https://esm.sh/@supabase/supabase-js@2" {
     limit(count: number): Query<T>;
     maybeSingle(): Promise<QueryResult<T>>;
     update(values: Record<string, unknown>): Query<T>;
-    upsert(values: Record<string, unknown>, options?: { onConflict?: string }): Promise<QueryResult<T>>;
+    upsert(values: Record<string, unknown>, options?: { onConflict?: string }): Query<T>;
     is(column: string, value: null | boolean): Query<T>;
     delete(): Query<T>;
     lt(column: string, value: unknown): Query<T>;
@@ -57,7 +57,16 @@ declare module "https://esm.sh/@supabase/supabase-js@2" {
     from<T extends DatabaseRow = DatabaseRow>(table: string): Query<T>;
     rpc(name: string, args?: Record<string, unknown>): Promise<QueryResult<boolean>>;
     auth: {
-      getUser(token: string): Promise<{ data: { user: { id: string } | null }; error: unknown | null }>;
+      getUser(token: string): Promise<{
+        data: {
+          user: {
+            id: string;
+            email?: string;
+            user_metadata?: Record<string, unknown>;
+          } | null;
+        };
+        error: unknown | null;
+      }>;
     };
     channel(name: string, options?: Record<string, unknown>): BroadcastChannel;
     removeChannel(channel: BroadcastChannel): Promise<unknown>;

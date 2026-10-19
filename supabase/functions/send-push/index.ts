@@ -41,15 +41,15 @@ function normalizeEmail(value: string) {
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
-  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
-    return error.message;
+  if (error && typeof error === "object" && "message" in error && typeof (error as { message?: unknown }).message === "string") {
+    return (error as { message: string }).message;
   }
   return "Unexpected notification service error";
 }
 
 function parseBody(value: unknown): RequestBody | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as RequestBody
+    ? (value as RequestBody)
     : null;
 }
 
@@ -111,13 +111,16 @@ async function resolveRecipients(admin: AdminClient, body: RequestBody) {
   if (phones.size) queries.push(admin.from("users").select("id, phone").in("phone", Array.from(phones)));
   if (emails.size) queries.push(admin.from("users").select("id, phone").in("email", Array.from(emails)));
   const results = await Promise.all(queries);
-  if (results.some((result) => result.error)) {
+  if (results.some((result: { error: unknown }) => result.error)) {
     return { recipients: null, error: "Could not resolve notification recipients" };
   }
 
   const uniqueRecipients = new Map<string, Recipient>();
   for (const result of results) {
-    for (const user of result.data ?? []) uniqueRecipients.set(user.id, { id: user.id, phone: user.phone });
+    for (const userItem of (result.data ?? [])) {
+      const u = userItem as { id: string; phone: string };
+      uniqueRecipients.set(u.id, { id: u.id, phone: u.phone });
+    }
   }
   return { recipients: Array.from(uniqueRecipients.values()), error: null };
 }
@@ -139,7 +142,7 @@ async function sendNotifications(
     .eq("user_phone", sender.phone);
   if (contactsError) return jsonResponse({ error: "Could not verify recipient permissions" }, 500);
 
-  const allowedPhones = new Set((contacts ?? []).map((contact) => normalizePhone(contact.phone)));
+  const allowedPhones = new Set((contacts ?? []).map((contact: { phone: string }) => normalizePhone(contact.phone)));
   if (recipients.some((recipient) => recipient.id !== sender.id && !allowedPhones.has(normalizePhone(recipient.phone)))) {
     return jsonResponse({ error: "Recipient is not in your trusted contacts" }, 403);
   }
@@ -148,7 +151,7 @@ async function sendNotifications(
   const title = typeof body.title === "string" ? body.title.slice(0, 160) : "Déloci Alert";
   const message = typeof body.body === "string" ? body.body.slice(0, 2000) : "Safety update received.";
   const metadata = {
-    ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata : {}),
+    ...(body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata as Record<string, unknown> : {}),
     url: typeof body.url === "string" ? body.url : "/",
     tag: typeof body.tag === "string" ? body.tag.slice(0, 100) : "deloci-alert",
   };
@@ -178,7 +181,7 @@ async function sendNotifications(
     vapidPrivateKey,
   );
   const payload = JSON.stringify({ title, body: message, type, url: metadata.url, tag: metadata.tag, metadata });
-  const deliveries = await Promise.allSettled((subscriptions ?? []).map(async (subscription) => {
+  const deliveries = await Promise.allSettled((subscriptions ?? []).map(async (subscription: { id: string; endpoint: string; p256dh: string; auth: string }) => {
     try {
       return await webpush.sendNotification({
         endpoint: subscription.endpoint,
@@ -186,7 +189,7 @@ async function sendNotifications(
       }, payload, { headers: { Urgency: "high" }, TTL: 60 });
     } catch (error) {
       const statusCode = error && typeof error === "object" && "statusCode" in error
-        ? error.statusCode
+        ? (error as { statusCode?: number }).statusCode
         : undefined;
       if (statusCode === 404 || statusCode === 410) {
         const { error: updateError } = await admin
@@ -202,7 +205,7 @@ async function sendNotifications(
   await Promise.all(recipients.map((recipient) => publishNotificationChange(admin, recipient.id)));
   return jsonResponse({
     success: true,
-    notificationCount: notifications?.length ?? 0,
+    notificationCount: (notifications as unknown[])?.length ?? 0,
     delivered: deliveries.filter((delivery) => delivery.status === "fulfilled").length,
     failures: deliveries.filter((delivery) => delivery.status === "rejected").length,
   });
@@ -225,7 +228,8 @@ Deno.serve(async (request) => {
     const token = bearerToken(request);
     if (!token) return jsonResponse({ error: "Unauthorized" }, 401);
 
-    const { data: { user }, error: authError } = await admin.auth.getUser(token);
+    const { data: authData, error: authError } = await admin.auth.getUser(token);
+    const user = authData.user;
     if (authError || !user) return jsonResponse({ error: "Unauthorized" }, 401);
 
     let body: RequestBody | null;
@@ -237,12 +241,33 @@ Deno.serve(async (request) => {
     if (!body) return jsonResponse({ error: "Invalid request body" }, 400);
 
     action = typeof body.action === "string" ? body.action : "";
-    const { data: sender, error: senderError } = await admin
+
+    const userMetadata = (user.user_metadata ?? {}) as Record<string, unknown>;
+    const metaPhone = typeof userMetadata.phone === "string" ? userMetadata.phone : "";
+    const userEmail = typeof user.email === "string" ? user.email : "";
+
+    const senderResult = await admin
       .from("users")
       .select("id, phone")
       .eq("id", user.id)
       .maybeSingle();
-    if (senderError || !sender) return jsonResponse({ error: "Notification profile not found" }, 401);
+
+    let sender: Sender;
+    if (senderResult.error || !senderResult.data) {
+      const fallbackPhone = metaPhone || (userEmail ? "+" + userEmail.split("@")[0] : "+0000000000");
+      const upsertResult = await admin
+        .from("users")
+        .upsert({ id: user.id, phone: fallbackPhone }, { onConflict: "id" })
+        .select("id, phone")
+        .single();
+
+      if (upsertResult.error || !upsertResult.data) {
+        return jsonResponse({ error: "Could not provision notification profile" }, 500);
+      }
+      sender = upsertResult.data as Sender;
+    } else {
+      sender = senderResult.data as Sender;
+    }
 
     if (action === "subscribe") {
       const endpoint = typeof body.endpoint === "string" ? body.endpoint : "";
