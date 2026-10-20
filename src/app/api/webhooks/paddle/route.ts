@@ -3,7 +3,6 @@ import { createClient } from "@supabase/supabase-js";
 
 export async function POST(request: Request) {
   try {
-    // Initialize Supabase admin client inside the handler
     const supabaseAdmin = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL || "",
       process.env.SUPABASE_SERVICE_ROLE_KEY || ""
@@ -13,7 +12,6 @@ export async function POST(request: Request) {
     const eventType = body.event_type;
     const data = body.data;
 
-    // Handle Subscription Creation or Updates
     if (
       eventType === "subscription.created" ||
       eventType === "subscription.updated"
@@ -31,7 +29,7 @@ export async function POST(request: Request) {
             user_id: userId,
             paddle_subscription_id: subscriptionId,
             status: status,
-            tier: status === "active" ? "pro" : "free",
+            tier: status === "active" ? "plus" : "free",
             current_period_end: currentPeriodEnd,
           },
           { onConflict: "paddle_subscription_id" }
@@ -39,7 +37,6 @@ export async function POST(request: Request) {
       }
     }
 
-    // Handle Subscription Cancellation
     if (eventType === "subscription.canceled") {
       const subscriptionId = data.id;
 
@@ -51,7 +48,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ received: true }, { status: 200 });
   } catch (error) {
-    console.error("Paddle webhook error:", error);
+    console.error("Paddle webhook processing error:", error);
     return NextResponse.json(
       { error: "Webhook handler failed" },
       { status: 500 }

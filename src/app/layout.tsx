@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "../components/theme-provider";
+import { PaddleProvider } from "../components/paddle-provider";
 import { OfflineSyncProvider } from "../components/offline-sync-provider";
 import { ServiceWorkerRegistration } from "../components/service-worker-registration";
 import "leaflet/dist/leaflet.css";
@@ -94,6 +95,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col bg-white dark:bg-[#0c0c0e] text-slate-900 dark:text-slate-100 transition-colors duration-200">
         <ThemeProvider attribute="class" defaultTheme="system" disableTransitionOnChange enableSystem>
+          <PaddleProvider />
           <OfflineSyncProvider>
             {children}
           </OfflineSyncProvider>
