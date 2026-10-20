@@ -24,6 +24,7 @@ import { normalizePhone } from "@/lib/utils";
 import { SatelliteMap } from "@/components/ui/satellite-map";
 import { subscribeUserToPush } from "@/lib/push-notifications";
 import { dispatchAlert } from "@/lib/alerts";
+import { useSubscription } from "@/hooks/use-subscription";
 
 interface Contact {
   id: string;
@@ -102,6 +103,7 @@ export function SessionPage({
   handleSafeCheckin,
   onNavigate,
 }: SessionPageProps) {
+  const { tier } = useSubscription(userId || undefined);
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [isCheckingIn, setIsCheckingIn] = useState<boolean>(false);
   const [actionMessage, setActionMessage] = useState("");
@@ -134,7 +136,6 @@ export function SessionPage({
   const [manuallyPickedLocation, setManuallyPickedLocation] = useState(false);
   const manuallyPickedLocationRef = useRef(false);
 
-  /* Auto-Suggestions State */
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   const [isFetchingSuggestions, setIsFetchingSuggestions] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -150,7 +151,6 @@ export function SessionPage({
   const locationWatchIdRef = useRef<number | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
-  // Fetch current user's profile avatar from the users table
   useEffect(() => {
     if (!userId) return;
     void supabase
@@ -704,6 +704,7 @@ export function SessionPage({
           <button type="button" onClick={() => setActionMessage("")} className="shrink-0 font-bold underline underline-offset-2">Dismiss</button>
         </div>
       )}
+
       {/* CAMERA OVERLAY */}
       {isCameraActive && (
         <div className="fixed inset-0 z-100 bg-black flex flex-col justify-between p-4 max-w-md mx-auto">
@@ -1169,6 +1170,24 @@ export function SessionPage({
                       Select individual contacts or entire circle groups to monitor your journey.
                     </p>
                   </div>
+
+                  {tier === "free" && (
+                    <div className="bg-yellow-400/10 border border-yellow-400/30 rounded-2xl p-3 flex items-center justify-between gap-2">
+                      <div className="flex items-center space-x-2 min-w-0">
+                        <Zap className="w-4 h-4 text-yellow-500 fill-yellow-500 shrink-0" />
+                        <span className="text-[11px] font-bold text-black dark:text-white truncate">
+                          Free plan: Up to 3 contacts
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onNavigate("profile")}
+                        className="text-[10px] font-black bg-yellow-400 text-black px-2.5 py-1 rounded-full shrink-0 active:scale-95 transition-all"
+                      >
+                        Upgrade Pro
+                      </button>
+                    </div>
+                  )}
 
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">

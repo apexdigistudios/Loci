@@ -16,9 +16,12 @@ import {
   Moon,
   Monitor,
   Loader2,
+  Zap,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { supabase } from "@/lib/supabase";
+import { useSubscription } from "@/hooks/use-subscription";
+import { PaddleCheckout } from "@/components/paddle-checkout";
 
 interface ProfilePageProps {
   fullName: string;
@@ -58,6 +61,7 @@ export function ProfilePage({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { theme, setTheme } = useTheme();
+  const { tier, loading: subscriptionLoading } = useSubscription(userId || undefined);
 
   // Fast client-side image compression using HTMLImageElement and Canvas
   const compressImage = (file: File, maxSize = 250): Promise<Blob> => {
@@ -259,10 +263,14 @@ export function ProfilePage({
               </p>
             </div>
 
-            <div className="pt-2 flex justify-center">
+            <div className="pt-2 flex justify-center items-center gap-2">
               <span className="inline-flex items-center space-x-1 text-[10px] font-black uppercase tracking-wider bg-emerald-500/10 text-emerald-500 px-3 py-1 rounded-full border border-emerald-500/20">
                 <ShieldCheck className="w-3.5 h-3.5" />
                 <span>Protected Member</span>
+              </span>
+              <span className={`inline-flex items-center space-x-1 text-[10px] font-black uppercase tracking-wider px-3 py-1 rounded-full border ${tier === "pro" ? "bg-yellow-400/20 text-yellow-500 border-yellow-400/30" : "bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-300 dark:border-zinc-700"}`}>
+                <Zap className="w-3 h-3 fill-current" />
+                <span>{subscriptionLoading ? "Loading..." : `${tier.toUpperCase()} TIER`}</span>
               </span>
             </div>
           </div>
@@ -281,6 +289,25 @@ export function ProfilePage({
               <span className="font-mono font-extrabold text-black dark:text-white">{userPhone}</span>
             </div>
           </div>
+
+          {tier === "free" && userId && (
+            <div className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-2xl border border-yellow-400/30 rounded-[26px] p-5 space-y-3 shadow-sm">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-xl bg-yellow-400 text-black flex items-center justify-center font-bold">
+                  <Zap className="w-4 h-4 fill-black" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-black text-black dark:text-white">Upgrade to Pro</h3>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">Unlock unlimited trusted contacts & advanced safety features.</p>
+                </div>
+              </div>
+              <PaddleCheckout
+                userEmail={`${userPhone.replace(/[^a-zA-Z0-9]/g, "")}@deloci.app`}
+                userId={userId}
+                priceId={process.env.NEXT_PUBLIC_PADDLE_PRICE_ID || "pri_pro_tier"}
+              />
+            </div>
+          )}
 
           <button
             onClick={() => setSubView("settings")}
