@@ -28,7 +28,7 @@ export interface Contact {
   contact_user_id?: string;
   name: string;
   phone: string;
-  group_category?: string | null;
+  group_category?: string;
   isLociUser?: boolean;
   avatar_url?: string;
 }
@@ -51,8 +51,9 @@ interface ContactsPageProps {
   setManualName: (v: string) => void;
   manualPhone: string;
   setManualPhone: (v: string) => void;
-  handleAddManualContact: (selectedGroup?: string | null, contact?: { name: string; phone: string }) => Promise<boolean>;
+  handleAddManualContact: (selectedGroup?: string, contact?: { name: string; phone: string }) => Promise<boolean>;
   handleDeleteContact: (id: string) => void;
+  onNavigate?: (tab: "home" | "session" | "contacts" | "share" | "profile") => void;
 }
 
 const DEFAULT_GROUPS = [
@@ -103,11 +104,9 @@ export function ContactsPage({
     () => (openSessionId ? "shared" : "contacts")
   );
   
-  // Requirement 2: Contacts view appears 1st by default
   const [circleView, setCircleView] = useState<"groups" | "contacts">("contacts");
   const [activeGroupView, setActiveGroupView] = useState<string | null>(null);
 
-  // Modal State - Requirement 3: Default to no group (direct contact)
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [customGroupInput, setCustomGroupInput] = useState("");
@@ -115,7 +114,6 @@ export function ContactsPage({
   const [showCustomGroupField, setShowCustomGroupField] = useState(false);
   const [pendingContact, setPendingContact] = useState<{ name: string; phone: string } | null>(null);
 
-  // Persistent Custom Groups State
   const [customGroups, setCustomGroups] = useState<CustomGroup[]>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("loci_custom_groups");
@@ -226,7 +224,7 @@ export function ContactsPage({
 
   const confirmPendingContact = async () => {
     if (!pendingContact) return;
-    const saved = await handleAddManualContact(selectedGroup, pendingContact);
+    const saved = await handleAddManualContact(selectedGroup || undefined, pendingContact);
     if (saved) {
       setPendingContact(null);
       setShowAddModal(false);
@@ -247,11 +245,7 @@ export function ContactsPage({
   ];
 
   const activeGroupData = allGroups.find((g) => g.key === activeGroupView);
-  
-  // Requirement 1: Separate groups strictly; only match exact group_category without fallbacks
-  const groupContacts = contacts.filter(
-    (c) => c.group_category === activeGroupView
-  );
+  const groupContacts = contacts.filter((c) => c.group_category === activeGroupView);
 
   return (
     <div className="space-y-5">
@@ -288,7 +282,6 @@ export function ContactsPage({
       {/* SUBVIEW 1: MY CIRCLE */}
       {subTab === "contacts" && (
         <>
-          {/* Pill Chips Filter - Requirement 2: Contacts view first */}
           <div className="flex items-center space-x-2 px-1">
             <button
               type="button"
@@ -331,7 +324,7 @@ export function ContactsPage({
                 <button
                   type="button"
                   onClick={() => {
-                    setSelectedGroup(null); // Default to ungrouped
+                    setSelectedGroup(null);
                     setShowAddModal(true);
                   }}
                   className="flex h-10 w-10 items-center justify-center rounded-full bg-yellow-400 text-black shadow-md shadow-yellow-400/20"
@@ -409,7 +402,6 @@ export function ContactsPage({
                 </div>
               </div>
 
-              {/* Group Header Banner */}
               <div className="bg-zinc-900 text-white p-5 rounded-[28px] border border-zinc-800 relative overflow-hidden flex flex-col justify-end min-h-36 shadow-lg">
                 {activeGroupData?.image ? (
                   <img
@@ -515,7 +507,6 @@ export function ContactsPage({
                 </button>
               </div>
 
-              {/* Bento Grid */}
               <div className="grid grid-cols-2 gap-3">
                 {allGroups.map((grp, idx) => {
                   const count = contacts.filter(
@@ -570,7 +561,6 @@ export function ContactsPage({
             </div>
           )}
 
-          {/* Add Modal - Requirement 3: Defaults to Contacts List (None / Ungrouped) */}
           {showAddModal && (
             <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
               <div className="bg-zinc-900 text-white border border-zinc-800 rounded-4xl p-6 w-full max-w-sm space-y-5 relative shadow-2xl">
@@ -596,7 +586,6 @@ export function ContactsPage({
                     Target Group (Optional)
                   </label>
                   <div className="grid grid-cols-2 gap-2">
-                    {/* None / Direct Contacts Option */}
                     <button
                       key="none"
                       type="button"
@@ -769,7 +758,6 @@ export function ContactsPage({
         </div>
       )}
 
-      {/* SUBVIEW 2: SHARED SESSIONS FULL PAGE DELEGATE */}
       {subTab === "shared" && (
         <SharedSessionsPage
           userPhone={userPhone}
