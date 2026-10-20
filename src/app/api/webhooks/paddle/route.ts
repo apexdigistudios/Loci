@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-// Initialize Supabase admin client for secure backend updates
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
-
 export async function POST(request: Request) {
   try {
+    // Initialize Supabase admin client inside the handler
+    const supabaseAdmin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+      process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+    );
+
     const body = await request.json();
     const eventType = body.event_type;
     const data = body.data;
@@ -19,9 +19,8 @@ export async function POST(request: Request) {
       eventType === "subscription.updated"
     ) {
       const subscriptionId = data.id;
-      const status = data.status; // 'active', 'trialing', 'past_due', etc.
-      const customerId = data.customer_id;
-      const customData = data.custom_data; // Contains user_id passed during checkout
+      const status = data.status;
+      const customData = data.custom_data;
       const userId = customData?.user_id;
       const items = data.items?.[0];
       const currentPeriodEnd = items?.current_billing_period?.ends_at;
