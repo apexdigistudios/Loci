@@ -13,8 +13,6 @@ import {
   Image as ImageIcon,
   Shield,
   UserCheck,
-  LayoutGrid,
-  Contact as ContactIcon,
 } from "lucide-react";
 import { SharedSessionsPage } from "./shared-sessions-page";
 
@@ -53,7 +51,7 @@ interface ContactsPageProps {
   setManualName: (v: string) => void;
   manualPhone: string;
   setManualPhone: (v: string) => void;
-  handleAddManualContact: (selectedGroup?: string, contact?: { name: string; phone: string }) => Promise<boolean>;
+  handleAddManualContact: (selectedGroup?: string | null, contact?: { name: string; phone: string }) => Promise<boolean>;
   handleDeleteContact: (id: string) => void;
 }
 
@@ -104,12 +102,14 @@ export function ContactsPage({
   const [subTab, setSubTab] = useState<"contacts" | "shared">(
     () => (openSessionId ? "shared" : "contacts")
   );
-  const [circleView, setCircleView] = useState<"groups" | "contacts">("groups");
+  
+  // Requirement 2: Contacts view appears 1st by default
+  const [circleView, setCircleView] = useState<"groups" | "contacts">("contacts");
   const [activeGroupView, setActiveGroupView] = useState<string | null>(null);
 
-  // Modal State
+  // Modal State - Requirement 3: Default to no group (direct contact)
   const [showAddModal, setShowAddModal] = useState(false);
-  const [selectedGroup, setSelectedGroup] = useState<string>("Emergency Circle");
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [customGroupInput, setCustomGroupInput] = useState("");
   const [customGroupImage, setCustomGroupImage] = useState<string | null>(null);
   const [showCustomGroupField, setShowCustomGroupField] = useState(false);
@@ -247,6 +247,8 @@ export function ContactsPage({
   ];
 
   const activeGroupData = allGroups.find((g) => g.key === activeGroupView);
+  
+  // Requirement 1: Separate groups strictly; only match exact group_category without fallbacks
   const groupContacts = contacts.filter(
     (c) => c.group_category === activeGroupView
   );
@@ -286,43 +288,36 @@ export function ContactsPage({
       {/* SUBVIEW 1: MY CIRCLE */}
       {subTab === "contacts" && (
         <>
-          {/* Liquid Icon Buttons Switcher */}
-          <div role="tablist" aria-label="Circle view" className="flex items-center justify-center space-x-3 p-1.5 bg-zinc-200/60 dark:bg-zinc-900/80 rounded-2xl border border-zinc-300/40 dark:border-zinc-800 max-w-xs mx-auto">
+          {/* Pill Chips Filter - Requirement 2: Contacts view first */}
+          <div className="flex items-center space-x-2 px-1">
             <button
               type="button"
-              role="tab"
-              aria-selected={circleView === "groups"}
-              onClick={() => {
-                setCircleView("groups");
-                setActiveGroupView(null);
-              }}
-              className={`flex-1 min-h-11 rounded-xl px-4 text-xs font-black transition-all flex items-center justify-center space-x-2 ${
-                circleView === "groups"
-                  ? "bg-white dark:bg-zinc-800 text-black dark:text-white shadow-md scale-105"
-                  : "text-zinc-400 hover:text-black dark:hover:text-white"
-              }`}
-              title="Groups View"
-            >
-              <LayoutGrid className="w-4 h-4 text-yellow-500" />
-              <span>Groups</span>
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={circleView === "contacts"}
               onClick={() => {
                 setCircleView("contacts");
                 setActiveGroupView(null);
               }}
-              className={`flex-1 min-h-11 rounded-xl px-4 text-xs font-black transition-all flex items-center justify-center space-x-2 ${
+              className={`px-4 py-1.5 rounded-full text-xs font-extrabold transition-all border ${
                 circleView === "contacts"
-                  ? "bg-white dark:bg-zinc-800 text-black dark:text-white shadow-md scale-105"
-                  : "text-zinc-400 hover:text-black dark:hover:text-white"
+                  ? "bg-yellow-400 text-black border-yellow-400 shadow-sm"
+                  : "bg-zinc-100 dark:bg-zinc-900/80 text-zinc-600 dark:text-zinc-300 border-zinc-300/60 dark:border-zinc-800 hover:border-zinc-400"
               }`}
-              title="Contacts View"
             >
-              <ContactIcon className="w-4 h-4 text-yellow-500" />
-              <span>Contacts ({contacts.length})</span>
+              Contacts ({contacts.length})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setCircleView("groups");
+                setActiveGroupView(null);
+              }}
+              className={`px-4 py-1.5 rounded-full text-xs font-extrabold transition-all border ${
+                circleView === "groups"
+                  ? "bg-yellow-400 text-black border-yellow-400 shadow-sm"
+                  : "bg-zinc-100 dark:bg-zinc-900/80 text-zinc-600 dark:text-zinc-300 border-zinc-300/60 dark:border-zinc-800 hover:border-zinc-400"
+              }`}
+            >
+              Groups
             </button>
           </div>
 
@@ -335,7 +330,10 @@ export function ContactsPage({
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(true)}
+                  onClick={() => {
+                    setSelectedGroup(null); // Default to ungrouped
+                    setShowAddModal(true);
+                  }}
                   className="flex h-10 w-10 items-center justify-center rounded-full bg-yellow-400 text-black shadow-md shadow-yellow-400/20"
                   aria-label="Add contact"
                   title="Add contact"
@@ -506,7 +504,10 @@ export function ContactsPage({
                 </div>
 
                 <button
-                  onClick={() => setShowAddModal(true)}
+                  onClick={() => {
+                    setSelectedGroup(null);
+                    setShowAddModal(true);
+                  }}
                   className="w-11 h-11 rounded-full bg-yellow-400 text-black flex items-center justify-center active:scale-90 transition-all shadow-lg shadow-yellow-400/20 border-2 border-yellow-300"
                   title="Add Guardian or Group"
                 >
@@ -569,7 +570,7 @@ export function ContactsPage({
             </div>
           )}
 
-          {/* Add Modal */}
+          {/* Add Modal - Requirement 3: Defaults to Contacts List (None / Ungrouped) */}
           {showAddModal && (
             <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md p-4 flex items-center justify-center animate-in fade-in">
               <div className="bg-zinc-900 text-white border border-zinc-800 rounded-4xl p-6 w-full max-w-sm space-y-5 relative shadow-2xl">
@@ -583,18 +584,32 @@ export function ContactsPage({
                 <div className="space-y-1">
                   <h3 className="text-sm font-extrabold flex items-center space-x-1.5 text-white">
                     <Users className="w-4 h-4 text-yellow-400" />
-                    <span>Add Guardian to Circle</span>
+                    <span>Add Contact to Circle</span>
                   </h3>
                   <p className="text-[11px] text-zinc-400">
-                    Select a group or create a new circle category.
+                    Saves to Contacts by default. Optionally choose a group category.
                   </p>
                 </div>
 
                 <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase text-zinc-400 tracking-wider">
-                    Target Guardian Group
+                    Target Group (Optional)
                   </label>
                   <div className="grid grid-cols-2 gap-2">
+                    {/* None / Direct Contacts Option */}
+                    <button
+                      key="none"
+                      type="button"
+                      onClick={() => setSelectedGroup(null)}
+                      className={`p-2.5 rounded-xl text-xs font-black text-left border transition-all ${
+                        selectedGroup === null
+                          ? "bg-yellow-400 text-black border-yellow-400 shadow-xs"
+                          : "bg-black/50 text-zinc-300 border-zinc-800 hover:border-zinc-700"
+                      }`}
+                    >
+                      None (Direct Contact)
+                    </button>
+
                     {allGroups.map((g) => (
                       <button
                         key={g.key}
@@ -678,7 +693,7 @@ export function ContactsPage({
                     ) : (
                       <>
                         <Users className="w-4 h-4" />
-                        <span>Import Phone Contact to {selectedGroup}</span>
+                        <span>Import Phone Contact</span>
                       </>
                     )}
                   </button>

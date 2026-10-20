@@ -250,6 +250,9 @@ export default function Home() {
             <Link href="/terms" className="hover:text-black dark:hover:text-white transition-colors">
               Terms
             </Link>
+            <Link href="/refund" className="hover:text-black dark:hover:text-white transition-colors">
+              Refunds
+            </Link>
             <Link href="/contact" className="hover:text-black dark:hover:text-white transition-colors">
               Contact
             </Link>
@@ -301,6 +304,13 @@ export default function Home() {
                 className="hover:text-black dark:hover:text-white transition-colors"
               >
                 Terms
+              </Link>
+              <Link
+                href="/refund"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="hover:text-black dark:hover:text-white transition-colors"
+              >
+                Refund Policy
               </Link>
               <Link
                 href="/contact"
@@ -514,6 +524,7 @@ export default function Home() {
               <Link href="/about" className="hover:text-black dark:hover:text-white transition-colors">About</Link>
               <Link href="/privacy" className="hover:text-black dark:hover:text-white transition-colors">Privacy</Link>
               <Link href="/terms" className="hover:text-black dark:hover:text-white transition-colors">Terms</Link>
+              <Link href="/refund" className="hover:text-black dark:hover:text-white transition-colors">Refund Policy</Link>
               <Link href="/contact" className="hover:text-black dark:hover:text-white transition-colors">Contact</Link>
               <a href="#faq" className="hover:text-black dark:hover:text-white transition-colors">FAQ</a>
             </div>

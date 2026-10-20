@@ -522,6 +522,8 @@ export function SharedSessionsPage({
                 <SatelliteMap
                   latitude={activeDetailCoordinates.latitude}
                   longitude={activeDetailCoordinates.longitude}
+                  nickname={ownerName}
+                  avatarUrl={activeDetailSession.user?.avatar_url}
                   className="h-48 w-full"
                 />
               </div>

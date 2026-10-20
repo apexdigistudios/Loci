@@ -105,6 +105,7 @@ export function SessionPage({
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [isCheckingIn, setIsCheckingIn] = useState<boolean>(false);
   const [actionMessage, setActionMessage] = useState("");
+  const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(undefined);
 
   const [attachedMedia, setAttachedMedia] = useState<{
     file: File;
@@ -148,6 +149,19 @@ export function SessionPage({
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const locationWatchIdRef = useRef<number | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+  // Fetch current user's profile avatar from the users table
+  useEffect(() => {
+    if (!userId) return;
+    void supabase
+      .from("users")
+      .select("avatar_url")
+      .eq("id", userId)
+      .single()
+      .then(({ data }) => {
+        if (data?.avatar_url) setUserAvatarUrl(data.avatar_url);
+      });
+  }, [userId]);
 
   const sharedContacts = useMemo(
     () => contacts.filter((c) => selectedContactIds.includes(c.id)),
@@ -862,6 +876,8 @@ export function SessionPage({
                 <SatelliteMap
                   latitude={locationCoords.latitude}
                   longitude={locationCoords.longitude}
+                  nickname="You"
+                  avatarUrl={userAvatarUrl}
                   interactive
                   manuallyPicked={manuallyPickedLocation}
                   onLocationChange={handleLocationPicked}
@@ -1023,6 +1039,8 @@ export function SessionPage({
                       <SatelliteMap
                         latitude={locationCoords.latitude}
                         longitude={locationCoords.longitude}
+                        nickname="You"
+                        avatarUrl={userAvatarUrl}
                         interactive
                         manuallyPicked={manuallyPickedLocation}
                         onLocationChange={handleLocationPicked}
