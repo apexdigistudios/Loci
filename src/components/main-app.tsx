@@ -674,11 +674,12 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   };
 
   const handleAddManualContact = async (
-    selectedGroup = "Emergency Circle",
+    selectedGroup?: string | null,
     pendingContact?: { name: string; phone: string }
   ): Promise<boolean> => {
     const contactName = pendingContact?.name.trim() || manualName.trim();
     const contactPhone = (pendingContact?.phone || manualPhone).replace(/[\s\-\(\)]/g, "");
+    const groupCategory = selectedGroup?.trim() || null;
     if (!contactName || !/^\+\d{7,15}$/.test(contactPhone)) return false;
 
     setAddingContact(true);
@@ -688,7 +689,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         user_phone: userPhone,
         name: contactName,
         phone: contactPhone,
-        group_category: selectedGroup,
+        group_category: groupCategory,
       })
       .select()
       .single();

@@ -17,7 +17,7 @@ create table if not exists public.trusted_contacts (
   user_phone text not null references public.users(phone) on delete cascade,
   name text not null,
   phone text not null,
-  group_category text not null default 'Emergency Circle',
+  group_category text,
   created_at timestamptz not null default now()
 );
 
