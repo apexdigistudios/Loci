@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+// Add GET so you can test it directly in your browser
+export async function GET() {
+  return NextResponse.json({ status: "Webhook endpoint is active and working!" }, { status: 200 });
+}
+
 export async function POST(request: Request) {
   try {
     const rawBody = await request.text();
@@ -9,25 +14,21 @@ export async function POST(request: Request) {
     try {
       event = JSON.parse(rawBody);
     } catch (e) {
-      console.error("Failed to parse webhook JSON:", e);
       return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
     }
 
     const eventType = event.event_type;
     const data = event.data;
 
-    console.log(`[Paddle Webhook] Received event: ${eventType}`);
-
     if (!data) {
-      return NextResponse.json({ received: true, note: "No data field" }, { status: 200 });
+      return NextResponse.json({ received: true }, { status: 200 });
     }
 
     const customData = data.custom_data || data.customData || {};
     const userId = customData.user_id;
 
     if (!userId) {
-      console.warn("[Paddle Webhook] Event received without user_id in custom_data");
-      return NextResponse.json({ received: true, note: "Missing user_id" }, { status: 200 });
+      return NextResponse.json({ received: true }, { status: 200 });
     }
 
     const supabaseAdmin = createClient(
@@ -46,7 +47,7 @@ export async function POST(request: Request) {
       const items = data.items?.[0];
       const currentPeriodEnd = items?.current_billing_period?.ends_at || data.current_billing_period?.ends_at;
 
-      const { error: upsertError } = await supabaseAdmin.from("subscriptions").upsert(
+      await supabaseAdmin.from("subscriptions").upsert(
         {
           user_id: userId,
           paddle_subscription_id: subscriptionId,
@@ -56,18 +57,10 @@ export async function POST(request: Request) {
         },
         { onConflict: "paddle_subscription_id" }
       );
-
-      if (upsertError) {
-        console.error("[Paddle Webhook] Supabase upsert error:", upsertError.message);
-        return NextResponse.json({ error: upsertError.message }, { status: 200 });
-      }
-
-      console.log(`[Paddle Webhook] Successfully upgraded user ${userId} to PLUS tier.`);
     }
 
     return NextResponse.json({ received: true }, { status: 200 });
   } catch (error: any) {
-    console.error("[Paddle Webhook] Unhandled error:", error);
     return NextResponse.json({ error: error.message }, { status: 200 });
   }
 }
