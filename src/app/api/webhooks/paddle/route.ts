@@ -42,7 +42,8 @@ export async function POST(request: Request) {
       eventType === "subscription.activated" ||
       eventType === "transaction.completed"
     ) {
-      const subscriptionId = data.id || data.subscription_id || `sub_${Date.now()}`;
+      // Prioritize explicit subscription_id if sent in transaction events, falling back to data.id
+      const subscriptionId = data.subscription_id || data.id || `sub_${Date.now()}`;
       const status = data.status || "active";
       const items = data.items?.[0];
       const currentPeriodEnd = items?.current_billing_period?.ends_at || data.current_billing_period?.ends_at;
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
           tier: "plus",
           current_period_end: currentPeriodEnd || null,
         },
-        { onConflict: "paddle_subscription_id" }
+        { onConflict: "user_id" } // Upsert based on user_id to maintain exactly one row per user
       );
     }
 
