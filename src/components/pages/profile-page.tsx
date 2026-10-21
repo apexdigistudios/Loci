@@ -74,10 +74,60 @@ export function ProfilePage({
   const [testPushResult, setTestPushResult] = useState("");
   const [activeAdIndex, setActiveAdIndex] = useState(0);
   const [checkoutLoading, setCheckoutLoading] = useState<"monthly" | "yearly" | null>(null);
+  const [dbTier, setDbTier] = useState<"free" | "plus">("free");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { theme, setTheme } = useTheme();
-  const { tier } = useSubscription(userId || undefined);
+  const { tier: hookTier } = useSubscription(userId || undefined);
+
+  // Directly fetch and listen to the subscriptions table in Supabase
+  useEffect(() => {
+    if (!userId) return;
+
+    async function fetchSubscription() {
+      const { data, error } = await supabase
+        .from("subscriptions")
+        .select("tier, status")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (!error && data) {
+        if (data.tier === "plus" || data.status === "active") {
+          setDbTier("plus");
+        }
+      }
+    }
+
+    fetchSubscription();
+
+    // Realtime subscription listener for instant UI updates upon webhook insertion
+    const channel = supabase
+      .channel(`sub_changes_${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "subscriptions",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const newRow = payload.new as { tier?: string; status?: string };
+          if (newRow?.tier === "plus" || newRow?.status === "active") {
+            setDbTier("plus");
+          } else {
+            setDbTier("free");
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userId]);
+
+  const tier = hookTier === "plus" || dbTier === "plus" ? "plus" : "free";
 
   useEffect(() => {
     if (subView !== "upgrade") return;
