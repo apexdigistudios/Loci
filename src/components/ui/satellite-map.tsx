@@ -8,6 +8,8 @@ interface SatelliteMapProps {
   longitude: number;
   nickname?: string;
   avatarUrl?: string;
+  receiverNickname?: string;
+  receiverAvatarUrl?: string;
   interactive?: boolean;
   manuallyPicked?: boolean;
   onLocationChange?: (coords: { latitude: number; longitude: number }) => void;
@@ -21,6 +23,8 @@ export function SatelliteMap({
   longitude,
   nickname = "User",
   avatarUrl,
+  receiverNickname = "You",
+  receiverAvatarUrl,
   interactive = false,
   manuallyPicked = false,
   onLocationChange,
@@ -62,7 +66,7 @@ export function SatelliteMap({
       attributionControl: false,
     }).setView([latitude, longitude], 15);
 
-    // Google Labeled Hybrid Satellite tile layer[cite: 5]
+    // Google Labeled Hybrid Satellite tile layer
     L.tileLayer("https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", {
       maxZoom: 20,
     }).addTo(map);
@@ -97,7 +101,7 @@ export function SatelliteMap({
     return () => clearTimeout(timer);
   }, [className, showDirections]);
 
-  // Update sender marker with name + avatar layout & center map
+  // Update sender marker with name + avatar layout & continuously update live movement
   useEffect(() => {
     const map = mapInstanceRef.current;
     const L = LRef.current;
@@ -107,7 +111,6 @@ export function SatelliteMap({
       map.setView([latitude, longitude], map.getZoom(), { animate: true });
     }
 
-    // Custom HTML marker displaying sender name alongside the avatar image (similar to your Loci style)
     const customIcon = L.divIcon({
       className: "loci-leaflet-marker",
       html: `
@@ -152,7 +155,7 @@ export function SatelliteMap({
     };
   }, [interactive, onLocationChange, leafletLoaded]);
 
-  // Handle Directions & Route Calculation (Displaying both user and sender markers + polyline)
+  // Handle Directions & Live Route Calculation (Updating continuously as sender/receiver move)
   useEffect(() => {
     const map = mapInstanceRef.current;
     const L = LRef.current;
@@ -172,14 +175,18 @@ export function SatelliteMap({
       return;
     }
 
-    // Custom marker for YOU (the user viewing the route)
+    // Custom marker for YOU (Receiver) with Avatar/Initials and Name
     const receiverIcon = L.divIcon({
       className: "loci-leaflet-receiver-marker",
       html: `
-        <div style="position: relative; display: flex; flex-direction: column; align-items: center; width: 140px; left: -70px; bottom: 42px; pointer-events: none;">
+        <div style="position: relative; display: flex; flex-direction: column; align-items: center; width: 160px; left: -80px; bottom: 42px; pointer-events: none;">
           <div style="display: flex; align-items: center; background: #18181b; padding: 2px 8px 2px 2px; border-radius: 9999px; border: 1px solid rgba(59,130,246,0.5); margin-bottom: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.6); gap: 6px; pointer-events: auto;">
-            <div style="width: 22px; height: 22px; border-radius: 50%; background: #3b82f6; color: #fff; font-size: 9px; font-weight: 900; display: flex; align-items: center; justify-content: center;">YOU</div>
-            <span style="color: #3b82f6; font-size: 10px; font-weight: 900; white-space: nowrap; padding-right: 4px;">My Location</span>
+            ${
+              receiverAvatarUrl
+                ? `<img src="${receiverAvatarUrl}" style="width: 22px; height: 22px; border-radius: 50%; object-fit: cover; border: 1px solid #3b82f6;" />`
+                : `<div style="width: 22px; height: 22px; border-radius: 50%; background: #3b82f6; color: #fff; font-size: 9px; font-weight: 900; display: flex; align-items: center; justify-content: center; text-transform: uppercase;">${(receiverNickname || "You").slice(0, 2)}</div>`
+            }
+            <span style="color: #3b82f6; font-size: 10px; font-weight: 900; white-space: nowrap; padding-right: 4px;">${receiverNickname || "You"}</span>
           </div>
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="36" height="42" fill="#3b82f6" stroke="#111827" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 3px 6px rgba(0,0,0,0.6));"><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5" fill="#111827" stroke="none"/></svg>
         </div>
@@ -189,9 +196,9 @@ export function SatelliteMap({
     });
 
     receiverMarkerRef.current = L.marker([receiverLocation.latitude, receiverLocation.longitude], { icon: receiverIcon }).addTo(map);
-    receiverMarkerRef.current.bindPopup("<b>Your Location (Receiver)</b>");
+    receiverMarkerRef.current.bindPopup(`<b>${receiverNickname} (You)</b>`);
 
-    async function fetchRoute() {
+    async function fetchLiveRoute() {
       try {
         const url = `https://router.project-osrm.org/route/v1/driving/${receiverLocation!.longitude},${receiverLocation!.latitude};${longitude},${latitude}?overview=full&geometries=geojson`;
         const res = await fetch(url);
@@ -209,7 +216,6 @@ export function SatelliteMap({
           }).addTo(map);
 
           routeLayerRef.current = polyline;
-          map.fitBounds(polyline.getBounds(), { padding: [60, 60] });
 
           const distKm = (route.distance / 1000).toFixed(1);
           const durMins = Math.round(route.duration / 60);
@@ -219,20 +225,19 @@ export function SatelliteMap({
           });
         }
       } catch (err) {
-        console.error("OSRM routing error:", err);
+        console.error("OSRM live routing error:", err);
         const latlngs: [number, number][] = [
           [receiverLocation!.latitude, receiverLocation!.longitude],
           [latitude, longitude],
         ];
         const polyline = L.polyline(latlngs, { color: "#facc15", weight: 4, dashArray: "5, 5" }).addTo(map);
         routeLayerRef.current = polyline;
-        map.fitBounds(polyline.getBounds(), { padding: [60, 60] });
         setRouteInfo({ distance: "Direct route", duration: "~" });
       }
     }
 
-    void fetchRoute();
-  }, [showDirections, receiverLocation, latitude, longitude, leafletLoaded]);
+    void fetchLiveRoute();
+  }, [showDirections, receiverLocation, latitude, longitude, leafletLoaded, receiverNickname, receiverAvatarUrl]);
 
   return (
     <div className="relative h-full w-full">
