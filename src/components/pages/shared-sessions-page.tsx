@@ -259,6 +259,14 @@ export function SharedSessionsPage({
         "postgres_changes",
         { event: "*", schema: "public", table: "checkin_sessions" },
         (payload) => {
+          if (process.env.NODE_ENV === "development") {
+            const newRow = payload.new as Record<string, unknown> | null;
+            const oldRow = payload.old as Record<string, unknown> | null;
+            console.log("[checkin_sessions realtime] event:", payload.eventType);
+            console.log("[checkin_sessions realtime] new row:", payload.new);
+            console.log("[checkin_sessions realtime] session id:", newRow?.id || oldRow?.id || null);
+          }
+
           if (payload.eventType === "UPDATE" && payload.new) {
             const updated = payload.new as SharedSession;
             setSharedSessions((prev) =>

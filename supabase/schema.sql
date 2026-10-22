@@ -227,6 +227,8 @@ end;
 $$;
 
 -- Add the required tables to Realtime only when missing from the publication.
+alter table public.checkin_sessions replica identity full;
+
 do $$
 begin
   if not exists (
