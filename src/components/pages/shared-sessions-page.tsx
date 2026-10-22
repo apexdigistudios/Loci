@@ -197,7 +197,6 @@ export function SharedSessionsPage({
       if (matchedRecipientIds.length > 0) {
         filters.push(`id.in.(${matchedRecipientIds.join(",")})`);
       }
-      // Always include any escalated / SOS sessions globally so emergency alerts are never missed on feeds
       filters.push(`status.eq.escalated`);
 
       const { data: sessionsData, error: sessionsErr } = await supabase
@@ -250,6 +249,7 @@ export function SharedSessionsPage({
     }
   }, [currentUserId, userPhone]);
 
+  // Real-time Supabase subscription with INSTANT state patching for coordinates and status updates
   useEffect(() => {
     const loadTimer = window.setTimeout(() => void fetchSharedSessions(), 0);
 
@@ -258,8 +258,18 @@ export function SharedSessionsPage({
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "checkin_sessions" },
-        () => {
-          fetchSharedSessions();
+        (payload) => {
+          if (payload.eventType === "UPDATE" && payload.new) {
+            const updated = payload.new as SharedSession;
+            setSharedSessions((prev) =>
+              prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
+            );
+            setHistorySessions((prev) =>
+              prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
+            );
+          } else {
+            void fetchSharedSessions();
+          }
         }
       )
       .subscribe();
