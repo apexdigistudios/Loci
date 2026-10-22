@@ -642,6 +642,26 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     return true;
   };
 
+  const handleSosTriggered = (
+    sessionId: string | undefined,
+    coordinates: { latitude: number; longitude: number } | null
+  ) => {
+    setActiveSession((current) => {
+      if (!current) return current;
+      const updatedSession = {
+        ...current,
+        id: sessionId || current.id,
+        status: "escalated" as const,
+        current_lat: coordinates?.latitude ?? null,
+        current_lng: coordinates?.longitude ?? null,
+      };
+      if (typeof window !== "undefined") {
+        localStorage.setItem("loci_active_session", JSON.stringify(updatedSession));
+      }
+      return updatedSession;
+    });
+  };
+
   const handleCompleteSession = async (): Promise<boolean> => {
     const sessionToComplete = activeSession;
     const currentId = sessionToComplete?.id;
@@ -835,6 +855,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
                 handleCompleteSession={handleCompleteSession}
                 handleSafeCheckin={handleSafeCheckin}
                 handleStartSession={handleStartSession}
+                onSosTriggered={handleSosTriggered}
                 notes={notes}
                 onNavigate={setActiveTab}
                 selectedContactIds={selectedContactIds}

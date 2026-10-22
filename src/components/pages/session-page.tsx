@@ -75,6 +75,10 @@ interface SessionPageProps {
   handleStartSession: (e: React.FormEvent, coordinates?: SessionCoordinates) => void | Promise<boolean>;
   handleCompleteSession: () => void | Promise<boolean>;
   handleSafeCheckin: () => void | Promise<boolean>;
+  onSosTriggered: (
+    sessionId: string | undefined,
+    coordinates: SessionCoordinates | null
+  ) => void;
   onNavigate: (tab: "home" | "session" | "contacts" | "share" | "profile") => void;
 }
 
@@ -106,6 +110,7 @@ export function SessionPage({
   handleStartSession,
   handleCompleteSession,
   handleSafeCheckin,
+  onSosTriggered,
   onNavigate,
 }: SessionPageProps) {
   const { tier } = useSubscription(userId || undefined);
@@ -634,7 +639,7 @@ export function SessionPage({
   const handleTriggerSos = async () => {
     if (sosSending) return;
     const sosCountKey = `deloci_sos_uses_${userId || "guest"}`;
-    const usedSos = Number(localStorage.getItem(sosCountKey) || "0");
+    const usedSos = Math.max(0, Number(localStorage.getItem(sosCountKey) || "0") || 0);
 
     if (tier === "free" && usedSos >= 3) {
       setActionMessage("Free users can only use Emergency SOS 3 times. Upgrade to Plus for unlimited emergency broadcasts!");
@@ -644,101 +649,156 @@ export function SessionPage({
 
     setSosSending(true);
     try {
-      localStorage.setItem(sosCountKey, String(usedSos + 1));
-      
-      const sosMessage = `🚨 URGENT: Emergency SOS triggered! Current Location: ${locationAddress || "Unknown Address"} (${locationCoords ? `${locationCoords.latitude.toFixed(5)}, ${locationCoords.longitude.toFixed(5)}` : "No GPS"})`;
+      let sosCoordinates = locationCoords;
+      let sosAccuracy: number | null = null;
+      let hasFreshLocation = false;
 
-      let targetSessionId = activeSession?.id;
-
-      if (userId) {
-        const sosMetadata = {
-          latitude: locationCoords?.latitude,
-          longitude: locationCoords?.longitude,
-          address: locationAddress,
-          type: "emergency",
-          is_sos: true,
-          updated_at: new Date().toISOString(),
-        };
-
-        if (targetSessionId && !targetSessionId.startsWith("local-")) {
-          await supabase
-            .from("checkin_sessions")
-            .update({
-              status: "escalated",
-              notes: sosMessage,
-              metadata: sosMetadata,
-              current_lat: locationCoords?.latitude,
-              current_lng: locationCoords?.longitude,
-            })
-            .eq("id", targetSessionId);
-        } else {
-          const expectedArrival = new Date(Date.now() + 24 * 3600000).toISOString();
-          const { data: newSession, error: sessErr } = await supabase
-            .from("checkin_sessions")
-            .insert({
-              user_id: userId,
-              user_phone: userPhone || "",
-              destination: "🚨 EMERGENCY SOS",
-              expected_arrival_at: expectedArrival,
-              status: "escalated",
-              notes: sosMessage,
-              metadata: sosMetadata,
-              current_lat: locationCoords?.latitude,
-              current_lng: locationCoords?.longitude,
-            })
-            .select("id")
-            .single();
-
-          if (!sessErr && newSession) {
-            targetSessionId = newSession.id;
-            if (sharedContacts.length > 0) {
-              const recipientRows = sharedContacts.map(c => ({
-                session_id: newSession.id,
-                recipient_phone: c.phone,
-                contact_phone: c.phone,
-              }));
-              await supabase.from("session_recipients").insert(recipientRows);
-            }
+      if (navigator.geolocation) {
+        try {
+          const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+              enableHighAccuracy: true,
+              maximumAge: 0,
+              timeout: 8000,
+            });
+          });
+          const { latitude, longitude, accuracy } = position.coords;
+          if (Number.isFinite(latitude) && Number.isFinite(longitude)
+            && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180) {
+            sosCoordinates = { latitude, longitude };
+            sosAccuracy = Number.isFinite(accuracy) ? accuracy : null;
+            hasFreshLocation = true;
+            setLocationCoords(sosCoordinates);
+            setLocationUpdatedAt(new Date(position.timestamp));
+            setLocationStatus(accuracy > 500 ? "low-accuracy" : "granted");
           }
+        } catch (error) {
+          console.warn("Could not get a fresh GPS fix for SOS:", error);
         }
       }
 
-      void dispatchAlert({
-        userIds: userId || "",
-        title: "🚨 EMERGENCY SOS BROADCASTED",
-        message: sosMessage,
-        type: "emergency",
-        sessionId: targetSessionId,
-        metadata: {
-          latitude: locationCoords?.latitude,
-          longitude: locationCoords?.longitude,
-          address: locationAddress,
-          is_sos: true,
-        },
-      });
+      const cachedLocationIsRecent = locationUpdatedAt !== null
+        && Date.now() - locationUpdatedAt.getTime() <= 2 * 60 * 1000;
+      if (!hasFreshLocation && !cachedLocationIsRecent) sosCoordinates = null;
 
-      if (guardianUserIds.length > 0) {
-        void dispatchAlert({
-          userIds: guardianUserIds,
-          title: "🚨 EMERGENCY SOS FROM GUARDIAN",
-          message: sosMessage,
-          type: "emergency",
-          url: "/main?tab=contacts",
-          sessionId: targetSessionId,
-          metadata: {
-            latitude: locationCoords?.latitude,
-            longitude: locationCoords?.longitude,
-            address: locationAddress,
-            is_sos: true,
-          },
-        });
+      const sosAddress = hasFreshLocation ? "" : locationAddress;
+      const coordinateText = sosCoordinates
+        ? `${sosCoordinates.latitude.toFixed(6)}, ${sosCoordinates.longitude.toFixed(6)}${sosAccuracy !== null ? ` (GPS accuracy +/-${Math.round(sosAccuracy)}m)` : ""}`
+        : "GPS unavailable";
+      const sosMessage = `URGENT: Emergency SOS triggered! Current Location: ${sosAddress || coordinateText}`;
+      const sosMetadata = {
+        latitude: sosCoordinates?.latitude ?? null,
+        longitude: sosCoordinates?.longitude ?? null,
+        accuracy_m: sosAccuracy,
+        address: sosAddress || null,
+        type: "emergency",
+        is_sos: true,
+        updated_at: new Date().toISOString(),
+      };
+
+      let targetSessionId = activeSession?.id && !activeSession.id.startsWith("local-")
+        ? activeSession.id
+        : undefined;
+      let persistenceWarning = "";
+
+      if (userId) {
+        try {
+          if (targetSessionId) {
+            const { data, error } = await supabase
+              .from("checkin_sessions")
+              .update({
+                status: "escalated",
+                notes: sosMessage,
+                metadata: sosMetadata,
+                current_lat: sosCoordinates?.latitude ?? null,
+                current_lng: sosCoordinates?.longitude ?? null,
+              })
+              .eq("id", targetSessionId)
+              .select("id")
+              .maybeSingle();
+            if (error) throw error;
+            if (!data) throw new Error("The active session could not be updated.");
+          } else {
+            const expectedArrival = new Date(Date.now() + 24 * 3600000).toISOString();
+            const { data: newSession, error } = await supabase
+              .from("checkin_sessions")
+              .insert({
+                user_id: userId,
+                user_phone: userPhone || "",
+                destination: "EMERGENCY SOS",
+                expected_arrival_at: expectedArrival,
+                status: "escalated",
+                notes: sosMessage,
+                metadata: sosMetadata,
+                current_lat: sosCoordinates?.latitude ?? null,
+                current_lng: sosCoordinates?.longitude ?? null,
+              })
+              .select("id")
+              .single();
+            if (error) throw error;
+            targetSessionId = newSession.id;
+
+            if (sharedContacts.length > 0) {
+              const { error: recipientError } = await supabase.from("session_recipients").insert(
+                sharedContacts.map((contact) => ({
+                  session_id: newSession.id,
+                  recipient_phone: contact.phone,
+                  contact_phone: contact.phone,
+                }))
+              );
+              if (recipientError) throw recipientError;
+            }
+          }
+        } catch (error) {
+          console.error("Failed to persist SOS session:", error);
+          persistenceWarning = " The live session could not be saved.";
+          if (activeSession?.id.startsWith("local-")) targetSessionId = undefined;
+        }
       }
 
-      setActionMessage("Emergency SOS broadcasted successfully with your live location!");
+      const alertRequests = [
+        ...(userId ? [{
+          userIds: userId,
+          title: "EMERGENCY SOS BROADCASTED",
+          message: sosMessage,
+          type: "emergency" as const,
+          sessionId: targetSessionId,
+          metadata: sosMetadata,
+        }] : []),
+        ...(guardianUserIds.length > 0 ? [{
+          userIds: guardianUserIds,
+          title: "EMERGENCY SOS FROM GUARDIAN",
+          message: sosMessage,
+          type: "emergency" as const,
+          url: "/main?tab=contacts",
+          sessionId: targetSessionId,
+          metadata: sosMetadata,
+        }] : []),
+      ];
+
+      if (alertRequests.length === 0) {
+        throw new Error("No signed-in account or selected guardians are available to receive the SOS.");
+      }
+
+      const alertResults = await Promise.all(alertRequests.map((request) => dispatchAlert(request)));
+      const successfulAlerts = alertResults.filter((result) =>
+        !result.error && (result.notificationCount > 0 || result.delivered > 0)
+      );
+      if (successfulAlerts.length === 0) {
+        throw new Error(alertResults.find((result) => result.error)?.error || "No SOS recipients could be reached.");
+      }
+
+      localStorage.setItem(sosCountKey, String(usedSos + 1));
+      onSosTriggered(targetSessionId, sosCoordinates);
+      const locationMessage = sosCoordinates
+        ? hasFreshLocation ? "with a fresh GPS fix" : "with your last recent location"
+        : "without GPS coordinates; check your device location permission";
+      const recipientMessage = guardianUserIds.length === 0 ? " No guardians are selected for this session." : "";
+      setActionMessage(`Emergency SOS sent ${locationMessage}.${recipientMessage}${persistenceWarning}`);
       setShowSosModal(false);
     } catch (err) {
       console.error("SOS transmission failed:", err);
-      setActionMessage("Failed to send Emergency SOS. Please try again.");
+      setActionMessage(err instanceof Error ? `${err.message} Please try again.` : "Failed to send Emergency SOS. Please try again.");
     } finally {
       setSosSending(false);
     }
@@ -1002,7 +1062,7 @@ export function SessionPage({
             <div className="space-y-1">
               <h3 className="text-base font-black text-black dark:text-white">Trigger Emergency SOS?</h3>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                This will immediately broadcast an urgent emergency signal with your live location (<span className="font-bold text-red-600 dark:text-red-400">{locationAddress || "Acquiring GPS..."}</span>) to all your circle guardians.
+                This sends an urgent alert to the guardians selected for this session. We will request a fresh GPS fix; if unavailable, a location updated within the last two minutes may be included.
               </p>
             </div>
             <div className="grid grid-cols-2 gap-2 pt-2">

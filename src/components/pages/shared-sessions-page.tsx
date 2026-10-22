@@ -65,8 +65,8 @@ function getSessionCoordinates(session: SharedSession) {
   };
   const geoJsonCoordinates = Array.isArray(location.coordinates) ? location.coordinates : [];
   
-  const latitude = readCoordinate(metadata.latitude, row.current_lat, row.latitude, row.lat, row.location_latitude, row.last_latitude, location.latitude, location.lat, geoJsonCoordinates[1]);
-  const longitude = readCoordinate(metadata.longitude, row.current_lng, row.longitude, row.lng, row.location_longitude, row.last_longitude, location.longitude, location.lng, geoJsonCoordinates[0]);
+  const latitude = readCoordinate(row.current_lat, metadata.latitude, row.latitude, row.lat, row.location_latitude, row.last_latitude, location.latitude, location.lat, geoJsonCoordinates[1]);
+  const longitude = readCoordinate(row.current_lng, metadata.longitude, row.longitude, row.lng, row.location_longitude, row.last_longitude, location.longitude, location.lng, geoJsonCoordinates[0]);
 
   return latitude !== null && longitude !== null && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180
     ? { latitude, longitude }
@@ -469,6 +469,7 @@ export function SharedSessionsPage({
               <div className="relative group">
                 <div onClick={() => setIsMapFullScreen(true)} className="cursor-pointer">
                   <SatelliteMap
+                    key={`${activeDetailCoordinates.latitude}-${activeDetailCoordinates.longitude}`}
                     latitude={activeDetailCoordinates.latitude}
                     longitude={activeDetailCoordinates.longitude}
                     nickname={ownerName}
@@ -549,6 +550,7 @@ export function SharedSessionsPage({
               </div>
               <div className="flex-1 rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 relative">
                 <SatelliteMap
+                  key={`${activeDetailCoordinates.latitude}-${activeDetailCoordinates.longitude}`}
                   latitude={activeDetailCoordinates.latitude}
                   longitude={activeDetailCoordinates.longitude}
                   nickname={ownerName}
