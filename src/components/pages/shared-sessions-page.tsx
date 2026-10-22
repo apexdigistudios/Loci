@@ -9,11 +9,8 @@ import {
   ChevronRight,
   ChevronLeft,
   MapPin,
-  Users,
   MessageSquare,
   Navigation,
-  Plus,
-  ExternalLink,
   Maximize2,
   Minimize2,
   Lock,
@@ -84,34 +81,6 @@ function getSessionLocationAddress(session: SharedSession): string {
   return "";
 }
 
-function formatSessionDuration(startedAt: string, expectedArrivalAt: string) {
-  const totalMinutes = Math.max(0, Math.round((new Date(expectedArrivalAt).getTime() - new Date(startedAt).getTime()) / 60000));
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-}
-
-function getSessionParticipantNames(session: SharedSession, contacts: Contact[], userPhone: string, ownerName: string) {
-  const row = session as Record<string, unknown>;
-  const storedParticipants = row.participants ?? row.shared_with ?? row.guardian_phones;
-  const values = Array.isArray(storedParticipants) ? storedParticipants : [];
-  const names = values.map((participant) => {
-    if (typeof participant === "string") {
-      return contacts.find((contact) => cleanPhone(contact.phone) === cleanPhone(participant))?.name || participant;
-    }
-    if (participant && typeof participant === "object") {
-      const detail = participant as Record<string, unknown>;
-      const phone = typeof detail.phone === "string" ? detail.phone : "";
-      return (typeof detail.name === "string" && detail.name)
-        || contacts.find((contact) => cleanPhone(contact.phone) === cleanPhone(phone))?.name
-        || phone;
-    }
-    return "";
-  });
-
-  return Array.from(new Set([cleanPhone(session.user_phone) === cleanPhone(userPhone) ? "You" : ownerName, ...names].filter(Boolean)));
-}
-
 function openInDeviceMaps(latitude: number, longitude: number) {
   const isIOS = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
   const url = isIOS
@@ -137,7 +106,7 @@ export function SharedSessionsPage({
   onSessionOpened,
   onNavigate,
 }: SharedSessionsPageProps) {
-  const { tier } = useSubscription(currentUserId || undefined);
+  const { tier } = useSubscription(currentUserId || undefined, userPhone);
   const [sharedSessions, setSharedSessions] = useState<SharedSession[]>([]);
   const [historySessions, setHistorySessions] = useState<SharedSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -147,12 +116,10 @@ export function SharedSessionsPage({
   const [shareFeedback, setShareFeedback] = useState("");
   const [historyTab, setHistoryTab] = useState<"sent" | "received">("sent");
   
-  // Map expansion & Receiver-to-Sender directions state
   const [isMapFullScreen, setIsMapFullScreen] = useState(false);
   const [receiverCoords, setReceiverCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [showDirections, setShowDirections] = useState(false);
 
-  const mapSectionRef = useRef<HTMLDivElement>(null);
   const activeDetailSessionId = activeDetailSession?.id;
 
   useEffect(() => {
@@ -160,7 +127,6 @@ export function SharedSessionsPage({
     return () => window.clearInterval(timer);
   }, []);
 
-  // Acquire receiver's GPS coordinates for drawing directions
   useEffect(() => {
     if (typeof navigator !== "undefined" && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -242,7 +208,6 @@ export function SharedSessionsPage({
 
       const allSessions = sessionsData || [];
 
-      // Include active, escalated (SOS), and missed in active shared feeds
       const activeRows = allSessions.filter((s) => s.status === "active" || s.status === "escalated" || s.status === "missed");
       const historyRows = allSessions.filter((s) => s.status === "completed" || s.status === "expired");
 
@@ -367,7 +332,6 @@ export function SharedSessionsPage({
     const ownerName = getSenderDisplayName(activeDetailSession);
     const isActive = activeDetailSession.status === "active" || activeDetailSession.status === "escalated" || activeDetailSession.status === "missed";
     
-    // Robust SOS emergency detection check
     const sessionMetadata = activeDetailSession.metadata && typeof activeDetailSession.metadata === "object" ? activeDetailSession.metadata as Record<string, unknown> : {};
     const isSosEmergency = 
       activeDetailSession.status === "escalated" ||
@@ -396,35 +360,32 @@ export function SharedSessionsPage({
     };
 
     const statusLabel = getStatusLabel();
-    const activeGuardians = contacts.filter((contact) => guardianPhones.includes(contact.phone));
 
     return (
-      <div className="space-y-3.5 animate-in fade-in slide-in-from-right-4 min-h-[80vh] pb-8">
-        {/* Header Navigation */}
+      <div className="space-y-3.5 animate-in fade-in slide-in-from-right-4 min-h-[80vh] pb-8 max-w-md mx-auto px-2 sm:px-0">
         <div className="flex items-center justify-between">
           <button
             onClick={() => setActiveDetailSession(null)}
-            className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white active:scale-95 transition-all flex items-center space-x-1 pr-3 border border-zinc-200 dark:border-zinc-700"
+            className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white active:scale-95 transition-all flex items-center space-x-1 pr-3 border border-zinc-200 dark:border-zinc-700 shrink-0"
           >
             <ChevronLeft className="w-4 h-4 stroke-[2.5]" />
             <span className="text-xs font-bold">Back to Feeds</span>
           </button>
 
-          <span className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+          <span className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider shrink-0 ${
             isSosEmergency
               ? "bg-red-600 text-white font-black animate-pulse shadow-md"
               : statusLabel === "ACTIVE"
               ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
               : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700"
           }`}>
-            {isActive && <Radio className="w-3 h-3 animate-pulse text-emerald-500" />}
-            <span>{statusLabel}</span>
+            {isActive && <Radio className="w-3 h-3 animate-pulse text-emerald-500 shrink-0" />}
+            <span className="truncate">{statusLabel}</span>
           </span>
         </div>
 
-        {/* Profile / Context Card */}
-        <div className="bg-zinc-900 text-white p-3.5 rounded-2xl border border-zinc-800 flex items-center justify-between shadow-xs">
-          <div className="flex items-center space-x-3">
+        <div className="bg-zinc-900 text-white p-3.5 rounded-2xl border border-zinc-800 flex items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center space-x-3 min-w-0">
             <div className="w-11 h-11 rounded-xl overflow-hidden bg-zinc-800 text-yellow-400 font-bold text-sm flex items-center justify-center uppercase border border-zinc-700 shrink-0">
               {activeDetailSession.user?.avatar_url ? (
                 <img src={activeDetailSession.user.avatar_url} alt={`${ownerName}'s profile`} className="w-full h-full object-cover" />
@@ -432,51 +393,49 @@ export function SharedSessionsPage({
                 ownerName.slice(0, 2)
               )}
             </div>
-            <div>
-              <span className="text-[10px] font-bold uppercase text-zinc-400 tracking-wider">
+            <div className="min-w-0">
+              <span className="text-[10px] font-bold uppercase text-zinc-400 tracking-wider block">
                 {isSender ? "Sent Session" : "Received Session"}
               </span>
-              <h3 className="text-sm font-bold text-white leading-tight">
+              <h3 className="text-sm font-bold text-white truncate leading-tight">
                 {isActive
                   ? isSender ? "Your Active Safety Watch" : `Monitoring ${ownerName}`
                   : isSender ? "Your Past Session" : `${ownerName}'s Session`}
               </h3>
-              {!isSender && <p className="text-[10px] font-mono text-zinc-400 mt-0.5">{activeDetailSession.user_phone}</p>}
+              {!isSender && <p className="text-[10px] font-mono text-zinc-400 truncate mt-0.5">{activeDetailSession.user_phone}</p>}
             </div>
           </div>
         </div>
 
-        {/* Destination / Alert Info */}
         <div className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 rounded-2xl p-3.5 space-y-2.5 shadow-xs">
-          <div>
+          <div className="min-w-0">
             <p className="text-[9px] font-bold uppercase text-zinc-400 tracking-wider">Destination / Alert</p>
-            <h4 className="text-base font-bold text-black dark:text-white leading-tight mt-0.5">{activeDetailSession.destination}</h4>
+            <h4 className="text-sm sm:text-base font-bold text-black dark:text-white truncate leading-tight mt-0.5">{activeDetailSession.destination}</h4>
           </div>
 
-          <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-xl flex items-center justify-between border border-zinc-200/50 dark:border-zinc-800/50">
-            <div>
+          <div className="bg-zinc-50 dark:bg-zinc-800/50 p-2.5 rounded-xl flex items-center justify-between gap-2 border border-zinc-200/50 dark:border-zinc-800/50">
+            <div className="min-w-0">
               <p className="text-[9px] font-bold uppercase text-zinc-400">
                 {isActive ? "Expected Arrival Time" : "Expected Arrival"}
               </p>
-              <p className="text-xs font-bold font-mono text-black dark:text-white mt-0.5">
+              <p className="text-xs font-bold font-mono text-black dark:text-white truncate mt-0.5">
                 {new Date(activeDetailSession.expected_arrival_at).toLocaleTimeString([], {
                   hour: "2-digit",
                   minute: "2-digit",
                 })}
               </p>
             </div>
-            <Clock className="w-4 h-4 text-zinc-400" />
+            <Clock className="w-4 h-4 text-zinc-400 shrink-0" />
           </div>
         </div>
 
-        {/* Map View & Location Details with Directions & Expansion */}
-        <div ref={mapSectionRef} className="space-y-3 scroll-mt-4">
+        <div className="space-y-3">
           <div className="rounded-2xl border border-zinc-200/70 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/70 p-3.5 space-y-2.5">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 min-w-0">
                 <MapPin className="w-4 h-4 shrink-0 text-emerald-500" />
                 <div className="min-w-0">
-                  <p className="text-[11px] font-extrabold text-black dark:text-white">Live Location / Pinned Address</p>
+                  <p className="text-[11px] font-extrabold text-black dark:text-white truncate">Live Location / Pinned Address</p>
                   <p className="text-[10px] text-zinc-600 dark:text-zinc-300 font-semibold truncate">
                     {activeDetailAddress
                       ? activeDetailAddress
@@ -514,29 +473,28 @@ export function SharedSessionsPage({
                 <button
                   type="button"
                   onClick={() => setIsMapFullScreen(true)}
-                  className="absolute top-2 right-2 p-2 rounded-xl bg-black/70 backdrop-blur-md text-white border border-zinc-700 active:scale-90 transition-all flex items-center space-x-1 text-[10px] font-bold shadow-lg"
+                  className="absolute top-2 right-2 p-2 rounded-xl bg-black/70 backdrop-blur-md text-white border border-zinc-700 active:scale-90 transition-all flex items-center space-x-1 text-[10px] font-bold shadow-lg shrink-0"
                 >
                   <Maximize2 className="w-3.5 h-3.5" />
                   <span>Expand Map</span>
                 </button>
               </div>
 
-              {/* Directions toggle for SOS / Received Sessions (Plus tier unlocked) */}
               {isSosEmergency && !isSender && (
                 <div className="rounded-2xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      <Navigation className="w-4 h-4 text-yellow-500" />
-                      <div>
-                        <p className="text-xs font-black text-black dark:text-white">Sender Navigation &amp; Route</p>
-                        <p className="text-[10px] text-zinc-500">Draw directions from your location to sender</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center space-x-2 min-w-0">
+                      <Navigation className="w-4 h-4 text-yellow-500 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-black text-black dark:text-white truncate">Sender Navigation &amp; Route</p>
+                        <p className="text-[10px] text-zinc-500 truncate">Draw directions from your location</p>
                       </div>
                     </div>
                     {tier === "plus" ? (
                       <button
                         type="button"
                         onClick={() => setShowDirections(!showDirections)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
                           showDirections
                             ? "bg-yellow-400 text-black font-black"
                             : "bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white"
@@ -545,15 +503,15 @@ export function SharedSessionsPage({
                         {showDirections ? "Hide Route" : "Show Route"}
                       </button>
                     ) : (
-                      <div className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-yellow-400/20 text-yellow-600 dark:text-yellow-400 text-xs font-bold border border-yellow-400/30">
+                      <div className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-yellow-400/20 text-yellow-600 dark:text-yellow-400 text-xs font-bold border border-yellow-400/30 shrink-0">
                         <Lock className="w-3 h-3" />
                         <span onClick={() => onNavigate?.("profile")} className="cursor-pointer underline">Plus Feature</span>
                       </div>
                     )}
                   </div>
                   {tier !== "plus" && (
-                    <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                      Free users can view SOS emergency location. Upgrade to Déloci Plus to unlock real-time turn-by-turn routing to the sender!
+                    <p className="text-[10px] text-zinc-500 dark:text-zinc-400 leading-tight">
+                      Upgrade to Déloci Plus to unlock real-time turn-by-turn routing to the sender!
                     </p>
                   )}
                 </div>
@@ -562,19 +520,18 @@ export function SharedSessionsPage({
           )}
         </div>
 
-        {/* EXPANDED MAP MODAL */}
         {isMapFullScreen && activeDetailCoordinates && (
           <div className="fixed inset-0 z-99999 bg-white/95 dark:bg-black/90 backdrop-blur-md flex items-center justify-center p-3 transition-colors">
             <div className="w-full max-w-md h-[90vh] bg-zinc-100 dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 flex flex-col justify-between overflow-hidden p-3 shadow-2xl">
               <div className="flex items-center justify-between pb-2">
-                <div className="flex items-center space-x-2">
-                  <span className="text-xs font-black text-black dark:text-white">Expanded Emergency Map</span>
-                  {showDirections && <span className="text-[9px] font-bold bg-yellow-400 text-black px-2 py-0.5 rounded-full">Route Active</span>}
+                <div className="flex items-center space-x-2 min-w-0">
+                  <span className="text-xs font-black text-black dark:text-white truncate">Expanded Emergency Map</span>
+                  {showDirections && <span className="text-[9px] font-bold bg-yellow-400 text-black px-2 py-0.5 rounded-full shrink-0">Route Active</span>}
                 </div>
                 <button
                   type="button"
                   onClick={() => setIsMapFullScreen(false)}
-                  className="p-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white text-xs font-bold flex items-center space-x-1 px-3 active:scale-95 transition-all"
+                  className="p-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white text-xs font-bold flex items-center space-x-1 px-3 active:scale-95 transition-all shrink-0"
                 >
                   <Minimize2 className="w-3.5 h-3.5" />
                   <span>Close</span>
@@ -595,32 +552,30 @@ export function SharedSessionsPage({
           </div>
         )}
 
-        {/* Notes */}
         {activeDetailSession.notes && (
-          <div className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 p-2.5 rounded-xl text-xs space-y-1">
+          <div className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 p-3 rounded-xl text-xs space-y-1">
             <p className="text-[9px] font-bold uppercase text-zinc-400 flex items-center space-x-1">
-              <MessageSquare className="w-3 h-3 text-yellow-500" />
+              <MessageSquare className="w-3 h-3 text-yellow-500 shrink-0" />
               <span>SOS Emergency Note</span>
             </p>
-            <p className="text-zinc-700 dark:text-zinc-200 font-medium text-[11px]">{activeDetailSession.notes}</p>
+            <p className="text-zinc-700 dark:text-zinc-200 font-medium text-[11px] wrap-break-word">{activeDetailSession.notes}</p>
           </div>
         )}
 
-        {/* Receiver Actions */}
         {!isSender && (
           <section className="space-y-2 pt-1">
             <a
               href={`tel:${activeDetailSession.user_phone}`}
-              className="w-full bg-black dark:bg-white text-white dark:text-black font-bold py-3 rounded-xl text-xs flex items-center justify-center space-x-2 active:scale-98 transition-transform shadow-xs"
+              className="w-full bg-black dark:bg-white text-white dark:text-black font-bold py-3.5 rounded-xl text-xs flex items-center justify-center space-x-2 active:scale-98 transition-transform shadow-xs"
             >
-              <Phone className="w-3.5 h-3.5 fill-current" />
-              <span>Call {ownerName}</span>
+              <Phone className="w-3.5 h-3.5 fill-current shrink-0" />
+              <span className="truncate">Call {ownerName}</span>
             </a>
             {isActive && (
               <button
                 type="button"
                 onClick={() => void shareEmergencyDetails(activeDetailSession, ownerName)}
-                className="w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 py-3 text-xs font-bold text-black dark:text-white"
+                className="w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 py-3.5 text-xs font-bold text-black dark:text-white"
               >
                 Share Emergency Details
               </button>
@@ -633,7 +588,7 @@ export function SharedSessionsPage({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5 max-w-md mx-auto px-2 sm:px-0 pb-10">
       <div>
         <h2 className="text-sm font-bold text-black dark:text-white">Shared Feeds</h2>
         <p className="text-[10px] text-zinc-500">
@@ -641,7 +596,6 @@ export function SharedSessionsPage({
         </p>
       </div>
 
-      {/* Active Shared Feeds */}
       {sessionsLoading ? (
         <div className="py-8 flex justify-center items-center">
           <Loader2 className="w-5 h-5 animate-spin text-yellow-500" />
@@ -666,13 +620,13 @@ export function SharedSessionsPage({
                 key={s.id}
                 type="button"
                 onClick={() => setActiveDetailSession(s)}
-                className={`w-full border p-3 rounded-xl shadow-xs flex items-center justify-between gap-2.5 text-left cursor-pointer transition-all group ${
+                className={`w-full border p-3 rounded-xl shadow-xs flex items-center justify-between gap-3 text-left cursor-pointer transition-all group ${
                   isSosItem
                     ? "bg-red-500/10 dark:bg-red-950/30 border-red-500/40 hover:border-red-500"
                     : "bg-white/80 dark:bg-zinc-900/80 border-zinc-200/50 dark:border-zinc-800/50 hover:border-yellow-500/50"
                 }`}
               >
-                <div className="flex items-center space-x-3 min-w-0">
+                <div className="flex items-center space-x-3 min-w-0 flex-1">
                   <div className="relative shrink-0">
                     <div className="w-9 h-9 rounded-xl overflow-hidden bg-zinc-900 text-yellow-400 font-bold text-xs flex items-center justify-center uppercase border border-zinc-800">
                       {s.user?.avatar_url ? (
@@ -685,7 +639,7 @@ export function SharedSessionsPage({
                   </div>
 
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center space-x-1.5">
+                    <div className="flex items-center space-x-1.5 flex-wrap">
                       <span className="text-xs font-bold text-black dark:text-white truncate">{displayName}</span>
                       <span className={`text-[8px] font-bold uppercase px-1.5 py-0.2 rounded-md shrink-0 ${
                         isSosItem
@@ -707,6 +661,78 @@ export function SharedSessionsPage({
           })}
         </div>
       )}
+
+      {/* RECENTS & HISTORY SECTION (Sent / Received Tabs) */}
+      <section className="space-y-3 pt-2">
+        <div className="flex items-center justify-between px-0.5 gap-2 flex-wrap">
+          <h3 className="text-xs font-bold text-black dark:text-white truncate">Recents &amp; History</h3>
+          
+          <div className="flex bg-zinc-100 dark:bg-zinc-800/80 p-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700/50 shrink-0">
+            <button
+              type="button"
+              onClick={() => setHistoryTab("sent")}
+              className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-all ${
+                historyTab === "sent"
+                  ? "bg-white dark:bg-zinc-900 text-black dark:text-white shadow-xs"
+                  : "text-zinc-500 hover:text-black dark:hover:text-white"
+              }`}
+            >
+              Sent ({sentHistory.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setHistoryTab("received")}
+              className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-all ${
+                historyTab === "received"
+                  ? "bg-white dark:bg-zinc-900 text-black dark:text-white shadow-xs"
+                  : "text-zinc-500 hover:text-black dark:hover:text-white"
+              }`}
+            >
+              Received ({receivedHistory.length})
+            </button>
+          </div>
+        </div>
+
+        {((historyTab === "sent" ? sentHistory : receivedHistory).length === 0) ? (
+          <p className="text-[10px] text-zinc-400 px-1 py-4 text-center bg-zinc-50 dark:bg-zinc-900/30 rounded-2xl border border-zinc-200/40 dark:border-zinc-800/40">
+            {historyTab === "sent" ? "No sent session history." : "No received session history."}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {(historyTab === "sent" ? sentHistory : receivedHistory).map((session) => {
+              const displayName = getSenderDisplayName(session);
+              const isCompleted = session.status === "completed";
+
+              return (
+                <button
+                  key={session.id}
+                  type="button"
+                  onClick={() => setActiveDetailSession(session)}
+                  className="w-full bg-white/80 dark:bg-zinc-900/70 border border-zinc-200/50 dark:border-zinc-800/50 p-3 rounded-xl flex items-center justify-between text-left hover:border-yellow-500/50 transition-colors gap-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-bold text-black dark:text-white truncate">{displayName}</span>
+                      <span className={`text-[8px] font-bold uppercase px-1.5 py-0.2 rounded-md shrink-0 ${
+                        isCompleted
+                          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                          : "bg-zinc-100 dark:bg-zinc-800 text-zinc-500"
+                      }`}>
+                        {session.status}
+                      </span>
+                    </div>
+                    <span className="block text-[11px] text-zinc-600 dark:text-zinc-300 truncate mt-0.5">{session.destination}</span>
+                    <span className="block text-[9px] text-zinc-400 mt-0.5">
+                      {new Date(session.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-zinc-400 shrink-0 ml-1" />
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
