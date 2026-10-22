@@ -413,7 +413,15 @@ export function SharedSessionsPage({
     const isSender = isSessionSender(activeDetailSession);
     const ownerName = getSenderDisplayName(activeDetailSession);
     const isActive = activeDetailSession.status === "active";
-    const isSosEmergency = activeDetailSession.notes?.includes("SOS") || activeDetailSession.destination?.includes("SOS");
+    
+    // Robust SOS emergency detection check
+    const sessionMetadata = activeDetailSession.metadata && typeof activeDetailSession.metadata === "object" ? activeDetailSession.metadata as Record<string, unknown> : {};
+    const isSosEmergency = 
+      activeDetailSession.notes?.toLowerCase().includes("sos") || 
+      activeDetailSession.destination?.toLowerCase().includes("sos") ||
+      activeDetailSession.notes?.toLowerCase().includes("emergency") ||
+      sessionMetadata.type === "emergency" ||
+      sessionMetadata.is_sos === true;
 
     const expectedArrivalMs = new Date(activeDetailSession.expected_arrival_at).getTime();
     const lastCheckinMs = new Date(activeDetailSession.last_user_checkin_at || activeDetailSession.created_at).getTime();
