@@ -19,6 +19,8 @@ import type { LucideIcon } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { invokeNotificationApi } from "@/lib/notification-api";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
+import { db } from "@/lib/db";
+import { queueOfflineAction } from "@/lib/offline-sync";
 
 type NotificationType = "session_start" | "checkin" | "emergency" | "session_end" | "update" | "guardian_alert";
 
@@ -58,7 +60,7 @@ function formatTimestamp(value: string) {
 
 export function NotificationsPage({ userId, onBack }: NotificationsPageProps) {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [clearingAll, setClearingAll] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -69,9 +71,25 @@ export function NotificationsPage({ userId, onBack }: NotificationsPageProps) {
       setLoading(false);
       return;
     }
+    const cached = await db.notifications.where("user_id").equals(userId).reverse().sortBy("created_at");
+    if (cached.length > 0) {
+      setNotifications(cached.map((notification) => ({
+        ...notification,
+        sender_id: notification.sender_id || null,
+        type: notification.type as NotificationType,
+        metadata: notification.metadata || {},
+      })));
+      setLoading(false);
+    }
+    if (!navigator.onLine) {
+      setLoading(false);
+      return;
+    }
     try {
       const result = await invokeNotificationApi<{ notifications: NotificationItem[] }>({ action: "list" });
       setNotifications(result.notifications || []);
+      await db.notifications.where("user_id").equals(userId).delete();
+      if (result.notifications?.length) await db.notifications.bulkPut(result.notifications);
       setErrorMessage("");
     } catch (error) {
       setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t load your activity just now. Please try again."));
@@ -96,14 +114,17 @@ export function NotificationsPage({ userId, onBack }: NotificationsPageProps) {
     const refreshOnFocus = () => {
       if (document.visibilityState === "visible") void fetchNotifications();
     };
+    const refreshOnline = () => void fetchNotifications();
     document.addEventListener("visibilitychange", refreshOnFocus);
     window.addEventListener("focus", refreshOnFocus);
+    window.addEventListener("online", refreshOnline);
 
     return () => {
       window.clearTimeout(initialFetchTimer);
       window.clearInterval(refreshTimer);
       document.removeEventListener("visibilitychange", refreshOnFocus);
       window.removeEventListener("focus", refreshOnFocus);
+      window.removeEventListener("online", refreshOnline);
       void supabase.removeChannel(channel);
     };
   }, [fetchNotifications, userId]);
@@ -114,27 +135,34 @@ export function NotificationsPage({ userId, onBack }: NotificationsPageProps) {
     setNotifications((current) => current.map((notification) =>
       notification.id === item.id ? { ...notification, is_read: nextValue } : notification
     ));
+    await db.notifications.update(item.id, { is_read: nextValue });
     try {
+      if (!navigator.onLine) {
+        await queueOfflineAction("notification_read", { id: item.id, is_read: nextValue }, item.id);
+        return;
+      }
       await invokeNotificationApi({ action: "mark_read", id: item.id, isRead: nextValue });
     } catch (error) {
-      setNotifications((current) => current.map((notification) =>
-        notification.id === item.id ? { ...notification, is_read: item.is_read } : notification
-      ));
-      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t update that item. Please try again."));
+      console.warn("Notification update queued for retry:", error);
+      await queueOfflineAction("notification_read", { id: item.id, is_read: nextValue }, item.id);
     } finally {
       setBusyId(null);
     }
   };
 
   const handleDelete = async (id: string) => {
-    const previous = notifications;
     setBusyId(id);
     setNotifications((current) => current.filter((item) => item.id !== id));
+    await db.notifications.delete(id);
     try {
+      if (!navigator.onLine) {
+        await queueOfflineAction("notification_delete", { id }, id);
+        return;
+      }
       await invokeNotificationApi({ action: "delete", id });
     } catch (error) {
-      setNotifications(previous);
-      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t remove that item. Please try again."));
+      console.warn("Notification deletion queued for retry:", error);
+      await queueOfflineAction("notification_delete", { id }, id);
     } finally {
       setBusyId(null);
     }
@@ -142,14 +170,18 @@ export function NotificationsPage({ userId, onBack }: NotificationsPageProps) {
 
   const handleClearAll = async () => {
     if (notifications.length === 0) return;
-    const previous = notifications;
     setClearingAll(true);
     setNotifications([]);
+    await db.notifications.where("user_id").equals(userId || "").delete();
     try {
+      if (!navigator.onLine) {
+        await queueOfflineAction("notification_clear", { userId }, userId || undefined);
+        return;
+      }
       await invokeNotificationApi({ action: "clear" });
     } catch (error) {
-      setNotifications(previous);
-      setErrorMessage(getFriendlyErrorMessage(error, "We couldn’t clear your activity. Please try again."));
+      console.warn("Notification clear queued for retry:", error);
+      await queueOfflineAction("notification_clear", { userId }, userId || undefined);
     } finally {
       setClearingAll(false);
     }

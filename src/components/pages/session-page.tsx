@@ -28,6 +28,8 @@ import { SatelliteMap } from "@/components/ui/satellite-map";
 import { subscribeUserToPush } from "@/lib/push-notifications";
 import { dispatchAlert } from "@/lib/alerts";
 import { useSubscription } from "@/hooks/use-subscription";
+import { db } from "@/lib/db";
+import { queueOfflineAction } from "@/lib/offline-sync";
 
 interface Contact {
   id: string;
@@ -35,7 +37,7 @@ interface Contact {
   phone: string;
   isLociUser?: boolean;
   avatar_url?: string;
-  group_category?: string;
+  group_category?: string | null;
   contact_user_id?: string;
 }
 
@@ -179,27 +181,43 @@ export function SessionPage({
     address: string,
     isSos: boolean
   ) => {
+    const cachedSession = await db.checkin_sessions.get(sessionId);
+    const serverSessionId = cachedSession?.server_id || (sessionId.startsWith("local-") ? null : sessionId);
+    const timestamp = new Date().toISOString();
+    const metadata = {
+      latitude: coordinates.latitude,
+      longitude: coordinates.longitude,
+      address,
+      updated_at: timestamp,
+      is_sos: isSos,
+    };
+    if (!navigator.onLine || !serverSessionId) {
+      await queueOfflineAction("update_location", {
+        sessionId,
+        coordinates,
+        metadata,
+        timestamp,
+      }, sessionId);
+      return;
+    }
+
     const { data, error } = await supabase
       .from("checkin_sessions")
       .update({
         current_lat: coordinates.latitude,
         current_lng: coordinates.longitude,
-        metadata: {
-          latitude: coordinates.latitude,
-          longitude: coordinates.longitude,
-          address,
-          updated_at: new Date().toISOString(),
-          is_sos: isSos,
-        },
+        metadata,
       })
-      .eq("id", sessionId)
+      .eq("id", serverSessionId)
       .select("id")
       .maybeSingle();
 
     if (error) {
       console.error("Failed to publish live session location:", error);
+      await queueOfflineAction("update_location", { sessionId, coordinates, metadata, timestamp }, sessionId);
     } else if (!data) {
       console.error("Live session location was not saved; the session row was not visible to the sender.");
+      await queueOfflineAction("update_location", { sessionId, coordinates, metadata, timestamp }, sessionId);
     }
   }, []);
 
@@ -214,6 +232,30 @@ export function SessionPage({
         if (data?.avatar_url) setUserAvatarUrl(data.avatar_url);
       });
   }, [userId]);
+
+  const activeSessionId = activeSession?.id;
+
+  useEffect(() => {
+    if (!activeSessionId) return;
+    let previewUrl = "";
+    let disposed = false;
+    void db.media_metadata.where("session_id").equals(activeSessionId).first().then((cachedMedia) => {
+      if (disposed || !cachedMedia?.blob) return;
+      const mediaName = typeof cachedMedia.metadata?.name === "string" ? cachedMedia.metadata.name : "cached-media";
+      const file = new File([cachedMedia.blob], mediaName, { type: cachedMedia.mime_type || cachedMedia.blob.type });
+      previewUrl = URL.createObjectURL(file);
+      setAttachedMedia({
+        file,
+        previewUrl,
+        type: file.type.startsWith("video/") ? "video" : "image",
+      });
+    }).catch((error: unknown) => console.warn("Could not restore cached session media:", error));
+
+    return () => {
+      disposed = true;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [activeSessionId]);
 
   const sharedContacts = useMemo(
     () => contacts.filter((c) => selectedContactIds.includes(c.id)),
@@ -325,7 +367,7 @@ export function SessionPage({
         setLocationUpdatedAt(new Date());
         setLocationStatus(coords.accuracy > 500 ? "low-accuracy" : "granted");
 
-        if (activeSession && !activeSession.id.startsWith("local-")) {
+        if (activeSession) {
           void persistSessionLocation(
             activeSession.id,
             { latitude, longitude },
@@ -349,7 +391,7 @@ export function SessionPage({
           const longitude = coords.longitude;
           setLocationCoords({ latitude, longitude });
 
-          if (!activeSession.id.startsWith("local-")) {
+          if (activeSession) {
             await persistSessionLocation(
               activeSession.id,
               { latitude, longitude },
@@ -390,7 +432,7 @@ export function SessionPage({
       locationWatchIdRef.current = null;
     }
 
-    if (activeSession && !activeSession.id.startsWith("local-")) {
+    if (activeSession) {
       void persistSessionLocation(
         activeSession.id,
         coordinates,
@@ -702,10 +744,49 @@ export function SessionPage({
         updated_at: new Date().toISOString(),
       };
 
-      let targetSessionId = activeSession?.id && !activeSession.id.startsWith("local-")
-        ? activeSession.id
-        : undefined;
+      let targetSessionId = activeSession?.id;
       let persistenceWarning = "";
+
+      if (!navigator.onLine) {
+        if (targetSessionId) {
+          await queueOfflineAction("escalate_session", {
+            sessionId: targetSessionId,
+            notes: sosMessage,
+            current_lat: sosCoordinates?.latitude ?? null,
+            current_lng: sosCoordinates?.longitude ?? null,
+            metadata: sosMetadata,
+          }, targetSessionId);
+        }
+        if (userId) {
+          await queueOfflineAction("send_alert", {
+            userIds: userId,
+            title: "EMERGENCY SOS BROADCASTED",
+            message: sosMessage,
+            type: "emergency",
+            sessionId: targetSessionId,
+            metadata: sosMetadata,
+          }, targetSessionId);
+        }
+        if (guardianUserIds.length > 0) {
+          await queueOfflineAction("send_alert", {
+            userIds: guardianUserIds,
+            title: "EMERGENCY SOS FROM GUARDIAN",
+            message: sosMessage,
+            type: "emergency",
+            url: "/main?tab=contacts",
+            sessionId: targetSessionId,
+            metadata: sosMetadata,
+          }, targetSessionId);
+        }
+        if (!userId && guardianUserIds.length === 0) {
+          throw new Error("No account or selected guardians are available to queue the SOS.");
+        }
+        localStorage.setItem(sosCountKey, String(usedSos + 1));
+        onSosTriggered(targetSessionId, sosCoordinates);
+        setActionMessage("SOS saved on this device. It will be sent when you reconnect.");
+        setShowSosModal(false);
+        return;
+      }
 
       if (userId) {
         try {
@@ -758,7 +839,7 @@ export function SessionPage({
         } catch (error) {
           console.error("Failed to persist SOS session:", error);
           persistenceWarning = " The live session could not be saved.";
-          if (activeSession?.id.startsWith("local-")) targetSessionId = undefined;
+          if (activeSession?.id.startsWith("local-")) targetSessionId = activeSession.id;
         }
       }
 
@@ -907,6 +988,18 @@ export function SessionPage({
   const confirmStagedMedia = () => {
     if (stagedMedia) {
       setAttachedMedia(stagedMedia);
+      const mediaId = `${activeSession?.id || "draft"}:${stagedMedia.file.name}:${stagedMedia.file.lastModified}`;
+      void db.media_metadata.put({
+        id: mediaId,
+        owner_id: userId || undefined,
+        session_id: activeSession?.id,
+        uri: stagedMedia.previewUrl,
+        mime_type: stagedMedia.file.type,
+        size: stagedMedia.file.size,
+        blob: stagedMedia.file,
+        created_at: new Date().toISOString(),
+        metadata: { name: stagedMedia.file.name, media_type: stagedMedia.type },
+      }).catch((error: unknown) => console.warn("Could not cache attached media locally:", error));
       setStagedMedia(null);
     }
   };

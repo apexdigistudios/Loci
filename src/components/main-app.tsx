@@ -8,6 +8,8 @@ import { cleanPhone } from "@/lib/utils";
 import { requestNotificationPermission, type NotificationPermissionResult } from "@/lib/notifications";
 import { sendPushTestNotification, subscribeUserToPush } from "@/lib/push-notifications";
 import { dispatchAlert, prepareAlertFeedback } from "@/lib/alerts";
+import { db } from "@/lib/db";
+import { queueOfflineAction } from "@/lib/offline-sync";
 
 import { HomePage } from "@/components/pages/home-page";
 import { SessionPage } from "@/components/pages/session-page";
@@ -97,7 +99,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   const [locationStatus, setLocationStatus] = useState<"idle" | "requesting" | "granted" | "low-accuracy" | "denied">("idle");
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
 
-  const [dataLoading, setDataLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(false);
   const [currentBanner, setCurrentBanner] = useState(0);
   const [requestedSharedSessionId, setRequestedSharedSessionId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -235,30 +237,63 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   }, []);
 
   const loadUserData = useCallback(async () => {
-    setDataLoading(true);
+    const scopedPhone = cleanPhone(userPhone);
+    setDataLoading(navigator.onLine);
     try {
-      const { data: userData } = await supabase
+      const [cachedUser, cachedContacts, cachedSessions] = await Promise.all([
+        db.users.where("phone").equals(scopedPhone).first(),
+        db.trusted_contacts.where("user_phone").equals(scopedPhone).toArray(),
+        db.checkin_sessions.toArray(),
+      ]);
+      const scopedSessions = cachedSessions.filter((session) =>
+        cleanPhone(session.scope_phone || session.user_phone || "") === scopedPhone
+      );
+      if (cachedUser) {
+        setUserId(cachedUser.id);
+        setFullName(cachedUser.full_name || "");
+        setNickname(cachedUser.nickname || "");
+        setAvatarUrl(cachedUser.avatar_url || "");
+      }
+      if (cachedContacts.length > 0) {
+        setContacts(cachedContacts);
+        setSelectedContactIds(cachedContacts.map((contact) => contact.id));
+      }
+      const cachedActiveSession = scopedSessions
+        .filter((session) => session.status === "active" || session.status === "escalated")
+        .sort((left, right) => (right.created_at || "").localeCompare(left.created_at || ""))[0];
+      if (cachedActiveSession) {
+        setActiveSession(cachedActiveSession as ActiveSession);
+        localStorage.setItem("loci_active_session", JSON.stringify(cachedActiveSession));
+      }
+      const hasCachedAppData = !!cachedUser || cachedContacts.length > 0 || !!cachedActiveSession;
+      if (hasCachedAppData) setDataLoading(false);
+      if (!navigator.onLine) return;
+
+      const { data: userData, error: userError } = await supabase
         .from("users")
         .select("id, full_name, nickname, avatar_url")
-        .eq("phone", userPhone)
+        .eq("phone", scopedPhone)
         .maybeSingle();
 
-      if (userData) {
-        setUserId(userData.id);
-        setFullName(userData.full_name || "");
-        setNickname(userData.nickname || "");
-        setAvatarUrl(userData.avatar_url || "");
-      } else {
-        setUserId(null);
+      if (!userError) {
+        if (userData) {
+          setUserId(userData.id);
+          setFullName(userData.full_name || "");
+          setNickname(userData.nickname || "");
+          setAvatarUrl(userData.avatar_url || "");
+          await db.users.put({ ...cachedUser, ...userData, phone: scopedPhone, cached_at: new Date().toISOString() });
+        } else {
+          setUserId(null);
+        }
       }
 
-      const { data: contactsData } = await supabase
+      const { data: contactsData, error: contactsError } = await supabase
         .from("trusted_contacts")
         .select("id, name, phone, group_category")
-        .eq("user_phone", userPhone)
+        .eq("user_phone", scopedPhone)
         .order("created_at", { ascending: false });
 
-      if (contactsData && contactsData.length > 0) {
+      if (!contactsError && contactsData) {
         const phoneNumbers = Array.from(new Set(contactsData.flatMap((contact) => [
           contact.phone,
           cleanPhone(contact.phone),
@@ -276,6 +311,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           const matchedUser = matchedUserMap.get(cleanPhone(contact.phone));
           return {
             ...contact,
+            user_phone: scopedPhone,
             contact_user_id: matchedUser?.id,
             isLociUser: !!matchedUser,
             avatar_url: matchedUser?.avatar_url || undefined,
@@ -284,31 +320,57 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
 
         setContacts(formattedContacts);
         setSelectedContactIds(formattedContacts.map((c) => c.id));
-      } else {
-        setContacts([]);
+        await db.trusted_contacts.where("user_phone").equals(scopedPhone).delete();
+        if (formattedContacts.length > 0) await db.trusted_contacts.bulkPut(formattedContacts);
+        if (matchedUsers?.length) {
+          await db.users.bulkPut(matchedUsers.map((user) => ({
+            ...((cachedUser?.id === user.id) ? cachedUser : {}),
+            id: user.id,
+            phone: cleanPhone(user.phone),
+            avatar_url: user.avatar_url,
+            cached_at: new Date().toISOString(),
+          })));
+        }
       }
 
-      const { data: activeSessionRows } = await supabase
+      const { data: activeSessionRows, error: sessionsError } = await supabase
         .from("checkin_sessions")
-        .select("id, user_phone, destination, expected_arrival_at, status, notes, user_reminder_mins, contact_reminder_mins, last_user_checkin_at")
-        .eq("status", "active")
+        .select("*")
+        .in("status", ["active", "escalated"])
         .order("created_at", { ascending: false });
 
+      if (sessionsError) throw sessionsError;
       const sessionData = activeSessionRows?.find((session) =>
         cleanPhone(session.user_phone) === cleanPhone(userPhone)
       );
 
       if (sessionData) {
-        setActiveSession(sessionData);
+        const scopedSession = { ...sessionData, scope_phone: scopedPhone };
+        setActiveSession(scopedSession);
         if (typeof window !== "undefined") {
-          localStorage.setItem("loci_active_session", JSON.stringify(sessionData));
+          localStorage.setItem("loci_active_session", JSON.stringify(scopedSession));
         }
+        await db.checkin_sessions.put(scopedSession);
       } else if (typeof window !== "undefined") {
+        await db.checkin_sessions.where("scope_phone").equals(scopedPhone)
+          .filter((session) => (session.status === "active" || session.status === "escalated")
+            && !session.id.startsWith("local-") && !session.server_id)
+          .delete();
+        const pendingCachedSession = await db.checkin_sessions.toArray().then((sessions) => sessions.find((session) =>
+          session.scope_phone === scopedPhone
+          && (session.status === "active" || session.status === "escalated")
+          && (session.id.startsWith("local-") || !!session.server_id)
+        ));
         const cached = localStorage.getItem("loci_active_session");
+        if (pendingCachedSession) {
+          setActiveSession(pendingCachedSession as ActiveSession);
+          localStorage.setItem("loci_active_session", JSON.stringify(pendingCachedSession));
+        } else
         if (cached) {
           try {
             const parsed = JSON.parse(cached);
-            if (parsed.status === "active") {
+            if ((parsed.status === "active" || parsed.status === "escalated")
+              && cleanPhone(parsed.scope_phone || parsed.user_phone || "") === scopedPhone) {
               setActiveSession(parsed);
             }
           } catch {
@@ -333,6 +395,11 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       setUnreadNotificationCount(0);
       return;
     }
+    const cachedNotifications = await db.notifications.where("user_id").equals(userId).toArray();
+    if (cachedNotifications.length > 0) {
+      setUnreadNotificationCount(cachedNotifications.filter((notification) => !notification.is_read).length);
+    }
+    if (!navigator.onLine) return;
     try {
       const { count, error } = await supabase
         .from("notifications")
@@ -364,6 +431,28 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
   }, [fetchUnreadNotificationCount, userId]);
 
   const fetchReceivedSessions = useCallback(async () => {
+    const scopedPhone = cleanPhone(userPhone);
+    const cachedSessions = await db.checkin_sessions.toArray();
+    const cachedRecipients = await db.session_recipients.where("scope_phone").equals(scopedPhone).toArray();
+    const cachedRecipientIds = new Set(cachedRecipients.map((recipient) => recipient.session_id));
+    const cachedReceived = cachedSessions.filter((session) =>
+      (session.status === "active" || session.status === "escalated")
+      && cleanPhone(session.user_phone || "") !== scopedPhone
+      && (cachedRecipientIds.has(session.id)
+        || contacts.some((contact) => cleanPhone(contact.phone) === cleanPhone(session.user_phone || "")))
+    );
+    if (cachedReceived.length > 0) {
+      setReceivedSessions(cachedReceived.map((session) => ({
+        id: session.id,
+        user_phone: session.user_phone || "",
+        destination: session.destination,
+        expected_arrival_at: session.expected_arrival_at,
+        status: session.status as ReceivedSession["status"],
+        friendName: contacts.find((contact) => cleanPhone(contact.phone) === cleanPhone(session.user_phone || ""))?.name || "Circle Friend",
+      })));
+    }
+    if (!navigator.onLine) return;
+
     const contactPhones = new Set(contacts
       .map((contact) => cleanPhone(contact.phone))
       .filter((phone) => phone && phone !== cleanPhone(userPhone)));
@@ -398,6 +487,26 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       return ownerPhone !== currentPhone && (contactPhones.has(ownerPhone) || recipientSessionIds.has(session.id));
     });
 
+    await db.transaction("rw", db.checkin_sessions, db.session_recipients, async () => {
+      const serverSessionIds = new Set(receivedSessions.map((session) => session.id));
+      const existingCached = await db.checkin_sessions.toArray();
+      const stale = existingCached.filter((session) =>
+        session.scope_phone === currentPhone
+        && session.user_phone !== currentPhone
+        && !serverSessionIds.has(session.id)
+      );
+      if (stale.length) await db.checkin_sessions.bulkDelete(stale.map((session) => session.id));
+      await db.checkin_sessions.bulkPut(receivedSessions.map((session) => ({
+        ...session,
+        scope_phone: currentPhone,
+      })));
+      await db.session_recipients.where("scope_phone").equals(currentPhone).delete();
+      await db.session_recipients.bulkPut((recipients || [])
+        .filter((recipient) => cleanPhone(recipient.recipient_phone) === currentPhone
+          || cleanPhone(recipient.contact_phone) === currentPhone)
+        .map((recipient, index) => ({ ...recipient, id: `${recipient.session_id}:${index}`, scope_phone: currentPhone })));
+    });
+
     const senderPhones = Array.from(new Set(receivedSessions.map((session) => session.user_phone)));
     const { data: users } = await supabase
       .from("users")
@@ -415,6 +524,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         };
       })
     );
+    await db.users.bulkPut((users || []).map((user) => ({
+      id: `cached-${cleanPhone(user.phone)}`,
+      phone: cleanPhone(user.phone),
+      nickname: user.nickname,
+      full_name: user.full_name,
+      avatar_url: user.avatar_url,
+      cached_at: new Date().toISOString(),
+    })));
   }, [contacts, userPhone]);
 
   useEffect(() => {
@@ -423,6 +540,16 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     }, 0);
     return () => clearTimeout(timer);
   }, [fetchReceivedSessions]);
+
+  useEffect(() => {
+    const refreshOnline = () => {
+      void loadUserData();
+      void fetchReceivedSessions();
+      void fetchUnreadNotificationCount();
+    };
+    window.addEventListener("online", refreshOnline);
+    return () => window.removeEventListener("online", refreshOnline);
+  }, [fetchReceivedSessions, fetchUnreadNotificationCount, loadUserData]);
 
   useEffect(() => {
     const contactPhones = new Set(contacts
@@ -546,9 +673,42 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     const selectedContacts = contacts.filter((contact) => selectedContactIds.includes(contact.id));
 
     try {
+      const scopedSession = {
+        ...tempSession,
+        user_id: userId || undefined,
+        user_phone: cleanPhone(userPhone),
+        scope_phone: cleanPhone(userPhone),
+        notes: notes.trim() || null,
+        created_at: new Date().toISOString(),
+      };
+      await db.checkin_sessions.put(scopedSession);
+
+      if (!navigator.onLine) {
+        await queueOfflineAction("start_session", {
+          session: scopedSession,
+          recipients: selectedContacts.map((contact) => ({
+            contact_phone: contact.phone,
+            recipient_phone: contact.phone,
+          })),
+        }, tempSession.id);
+        if (selectedContacts.length > 0) {
+          await queueOfflineAction("send_alert", {
+            userIds: selectedContacts.map((contact) => contact.contact_user_id || contact.phone),
+            title: "Safety Session Shared",
+            message: `A safety session heading to ${destName} has been shared with you.`,
+            type: "session_start",
+            url: "/main?tab=contacts",
+            sessionId: tempSession.id,
+            metadata: { destination: destName },
+          }, tempSession.id);
+        }
+        return true;
+      }
+
       const { data, error } = await supabase
         .from("checkin_sessions")
         .insert({
+          client_mutation_id: tempSession.id,
           user_id: userId,
           user_phone: userPhone,
           destination: destName,
@@ -568,7 +728,10 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       if (!data) throw new Error("Session could not be saved.");
 
       if (!error && data) {
-        setActiveSession(data);
+        const persistedSession = { ...data, scope_phone: cleanPhone(userPhone) };
+        setActiveSession(persistedSession);
+        await db.checkin_sessions.put(persistedSession);
+        await db.checkin_sessions.delete(tempSession.id);
         if (userId) {
           void dispatchAlert({
             userIds: userId,
@@ -599,7 +762,18 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
               contact_phone: contact.phone,
               recipient_phone: contact.phone,
             })));
-          if (recipientsError) console.error("Failed to save session guardians:", recipientsError);
+          if (recipientsError) {
+            console.error("Failed to save session guardians:", recipientsError);
+            await queueOfflineAction("start_session", {
+              session: scopedSession,
+              serverSessionId: data.id,
+              recipients: selectedContacts.map((contact) => ({
+                contact_phone: contact.phone,
+                recipient_phone: contact.phone,
+              })),
+            }, tempSession.id);
+            await db.checkin_sessions.update(tempSession.id, { server_id: data.id });
+          }
         }
         if (typeof window !== "undefined") {
           localStorage.setItem("loci_active_session", JSON.stringify(data));
@@ -607,7 +781,34 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       }
     } catch (err) {
       console.error("Session creation failed:", err);
-      return false;
+      const scopedSession = {
+        ...tempSession,
+        user_id: userId || undefined,
+        user_phone: cleanPhone(userPhone),
+        scope_phone: cleanPhone(userPhone),
+        notes: notes.trim() || null,
+        created_at: new Date().toISOString(),
+      };
+      await db.checkin_sessions.put(scopedSession);
+      await queueOfflineAction("start_session", {
+        session: scopedSession,
+        recipients: selectedContacts.map((contact) => ({
+          contact_phone: contact.phone,
+          recipient_phone: contact.phone,
+        })),
+      }, tempSession.id);
+      if (selectedContacts.length > 0) {
+        await queueOfflineAction("send_alert", {
+          userIds: selectedContacts.map((contact) => contact.contact_user_id || contact.phone),
+          title: "Safety Session Shared",
+          message: `A safety session heading to ${destName} has been shared with you.`,
+          type: "session_start",
+          url: "/main?tab=contacts",
+          sessionId: tempSession.id,
+          metadata: { destination: destName },
+        }, tempSession.id);
+      }
+      return true;
     } finally {
       setSessionLoading(false);
       setDestination("");
@@ -620,7 +821,9 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     if (!activeSession) return false;
     const checkedInAt = new Date().toISOString();
 
-    if (!activeSession.id.startsWith("local-")) {
+    if (!navigator.onLine || activeSession.id.startsWith("local-")) {
+      await queueOfflineAction("safe_checkin", { sessionId: activeSession.id, timestamp: checkedInAt }, activeSession.id);
+    } else {
       try {
         const { error } = await supabase
           .from("checkin_sessions")
@@ -630,7 +833,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         if (error) throw error;
       } catch (error) {
         console.error("Failed to record safety check-in:", error);
-        return false;
+        await queueOfflineAction("safe_checkin", { sessionId: activeSession.id, timestamp: checkedInAt }, activeSession.id);
       }
     }
 
@@ -639,6 +842,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     if (typeof window !== "undefined") {
       localStorage.setItem("loci_active_session", JSON.stringify(updatedSession));
     }
+    await db.checkin_sessions.put({ ...updatedSession, scope_phone: cleanPhone(userPhone) });
     return true;
   };
 
@@ -658,6 +862,7 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
       if (typeof window !== "undefined") {
         localStorage.setItem("loci_active_session", JSON.stringify(updatedSession));
       }
+      void db.checkin_sessions.put({ ...updatedSession, scope_phone: cleanPhone(userPhone) });
       return updatedSession;
     });
   };
@@ -666,6 +871,15 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     const sessionToComplete = activeSession;
     const currentId = sessionToComplete?.id;
     if (!currentId) return false;
+
+    if (!navigator.onLine || currentId.startsWith("local-")) {
+      await queueOfflineAction("complete_session", { sessionId: currentId }, currentId);
+      await db.checkin_sessions.update(currentId, { status: "completed" });
+      setActiveSession(null);
+      localStorage.removeItem("loci_active_session");
+      return true;
+    }
+
     setActiveSession(null);
     if (typeof window !== "undefined") {
       localStorage.removeItem("loci_active_session");
@@ -679,13 +893,14 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
           .update({ status: "completed" })
           .eq("id", currentId);
         if (error) throw error;
+        await db.checkin_sessions.delete(currentId);
       } catch (error) {
         console.error("Failed to end safety session:", error);
-        setActiveSession(sessionToComplete);
-        if (typeof window !== "undefined") {
-          localStorage.setItem("loci_active_session", JSON.stringify(sessionToComplete));
-        }
-        return false;
+        await queueOfflineAction("complete_session", { sessionId: currentId }, currentId);
+        await db.checkin_sessions.update(currentId, { status: "completed" });
+        setActiveSession(null);
+        if (typeof window !== "undefined") localStorage.removeItem("loci_active_session");
+        return true;
       } finally {
         setSessionLoading(false);
       }
@@ -702,21 +917,38 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
     const groupCategory = selectedGroup?.trim() || null;
     if (!contactName || !/^\+\d{7,15}$/.test(contactPhone)) return false;
 
+    const localContact = {
+      id: `local-contact-${Date.now()}`,
+      user_phone: cleanPhone(userPhone),
+      name: contactName,
+      phone: contactPhone,
+      group_category: groupCategory,
+    };
+
+    if (!navigator.onLine) {
+      await db.trusted_contacts.put(localContact);
+      await queueOfflineAction("add_contact", { contact: localContact }, localContact.id);
+      setContacts((prev) => [localContact, ...prev]);
+      setSelectedContactIds((prev) => [...prev, localContact.id]);
+      setManualName("");
+      setManualPhone("");
+      return true;
+    }
+
     setAddingContact(true);
-    const { data, error } = await supabase
-      .from("trusted_contacts")
-      .insert({
-        user_phone: userPhone,
-        name: contactName,
-        phone: contactPhone,
-        group_category: groupCategory,
-      })
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from("trusted_contacts")
+        .insert({
+          user_phone: userPhone,
+          name: contactName,
+          phone: contactPhone,
+          group_category: groupCategory,
+        })
+        .select()
+        .single();
+      if (error) throw error;
 
-    setAddingContact(false);
-
-    if (!error && data) {
       const { data: matchedUser } = await supabase
         .from("users")
         .select("phone, avatar_url")
@@ -724,25 +956,59 @@ export function MainApp({ userPhone, onLogout }: MainAppProps) {
         .maybeSingle();
       const newContact: Contact = {
         ...data,
+        user_phone: cleanPhone(userPhone),
         isLociUser: !!matchedUser,
         avatar_url: matchedUser?.avatar_url || undefined,
       };
-
+      await db.trusted_contacts.put(newContact);
       setContacts((prev) => [newContact, ...prev]);
       setSelectedContactIds((prev) => [...prev, newContact.id]);
       setManualName("");
       setManualPhone("");
       return true;
+    } catch (error) {
+      console.error("Failed to add guardian contact:", error);
+      await db.trusted_contacts.put(localContact);
+      await queueOfflineAction("add_contact", { contact: localContact }, localContact.id);
+      setContacts((prev) => [localContact, ...prev]);
+      setSelectedContactIds((prev) => [...prev, localContact.id]);
+      setManualName("");
+      setManualPhone("");
+      return true;
+    } finally {
+      setAddingContact(false);
     }
-    if (error) console.error("Failed to add guardian contact:", error);
-    return false;
   };
 
   const handleDeleteContact = async (id: string) => {
-    const { error } = await supabase.from("trusted_contacts").delete().eq("id", id);
-    if (!error) {
+    const removeLocally = async () => {
+      await db.trusted_contacts.delete(id);
       setContacts((prev) => prev.filter((c) => c.id !== id));
       setSelectedContactIds((prev) => prev.filter((cId) => cId !== id));
+    };
+    if (id.startsWith("local-contact-")) {
+      const queuedAdd = await db.offline_queue
+        .where("action_type")
+        .equals("add_contact")
+        .filter((item) => item.entity_id === id)
+        .first();
+      if (queuedAdd?.id !== undefined) {
+        await db.offline_queue.delete(queuedAdd.id);
+        await removeLocally();
+        return;
+      }
+    }
+    if (!navigator.onLine) {
+      await queueOfflineAction("delete_contact", { id }, id);
+      await removeLocally();
+      return;
+    }
+    const { error } = await supabase.from("trusted_contacts").delete().eq("id", id);
+    if (!error) {
+      await removeLocally();
+    } else {
+      await queueOfflineAction("delete_contact", { id }, id);
+      await removeLocally();
     }
   };
 

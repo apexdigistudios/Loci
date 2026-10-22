@@ -35,8 +35,8 @@ export default function PrivacyPage() {
 
         <p className="text-sm sm:text-base text-zinc-600 dark:text-zinc-400 leading-relaxed border-b border-zinc-200 dark:border-zinc-800 pb-8">
           This Privacy Policy explains how Déloci collects, uses, and safeguards your data. For privacy inquiries, email{" "}
-          <a href="mailto:support@deloci.online" className="text-yellow-600 dark:text-yellow-400 font-medium underline">
-            support@deloci.online
+          <a href="mailto:hello.deloci@gmail.com" className="text-yellow-600 dark:text-yellow-400 font-medium underline">
+            hello.deloci@gmail.com
           </a>.
         </p>
 
@@ -89,7 +89,7 @@ export default function PrivacyPage() {
               5. Your Rights & Data Deletion
             </h2>
             <p>
-              You can view, edit, or clear your trusted contacts and past session logs directly within the application dashboard at any time. To request full deletion of your account record, contact us at support@deloci.online.
+              You can view, edit, or clear your trusted contacts and past session logs directly within the application dashboard at any time. To request full deletion of your account record, contact us at hello.deloci@gmail.com.
             </p>
           </section>
         </div>

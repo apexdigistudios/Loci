@@ -35,8 +35,8 @@ export default function TermsPage() {
 
         <p className="text-sm sm:text-base text-zinc-600 dark:text-zinc-400 leading-relaxed border-b border-zinc-200 dark:border-zinc-800 pb-8">
           These terms govern your access to and use of Déloci. Questions regarding this document can be directed to{" "}
-          <a href="mailto:support@deloci.online" className="text-yellow-600 dark:text-yellow-400 font-medium underline">
-            support@deloci.online
+          <a href="mailto:hello.deloci@gmail.com" className="text-yellow-600 dark:text-yellow-400 font-medium underline">
+            hello.deloci@gmail.com
           </a>.
         </p>
 

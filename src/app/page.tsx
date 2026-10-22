@@ -27,6 +27,7 @@ import { MainApp } from "@/components/main-app";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { SplashScreen } from "@/components/splash-screen";
 import { lookupReferrer } from "@/lib/auth";
+import { db } from "@/lib/db";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -88,6 +89,11 @@ const FAQS = [
   },
 ];
 
+type LandingCopy = {
+  howItWorks: Array<{ stepLabel: string; title: string; desc: string }>;
+  faqs: typeof FAQS;
+};
+
 export default function Home() {
   const [isPWA, setIsPWA] = useState<boolean | null>(null);
   const [splashComplete, setSplashComplete] = useState(false);
@@ -96,12 +102,39 @@ export default function Home() {
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
+  const [landingCopy, setLandingCopy] = useState<LandingCopy | null>(null);
 
   // Referral Toast State
   const [showReferralToast, setShowReferralToast] = useState(false);
   const [toastReferrerName, setToastReferrerName] = useState<string>("");
 
   useEffect(() => {
+    const defaultLandingContent: LandingCopy & { banners: Array<{ title: string; desc: string; image: string }> } = {
+      banners: [
+        { title: "Instant Guardian Radar", desc: "Lock in your route and notify your circle in real time.", image: "/banner/banner1.png" },
+        { title: "Night Watch", desc: "Set a safety countdown before heading out.", image: "/banner/banner2.png" },
+        { title: "Privacy First", desc: "Location access is limited to a session you start.", image: "/banner/banner3.png" },
+      ],
+      howItWorks: HOW_IT_WORKS_STEPS.map(({ title, desc, stepLabel }) => ({ title, desc, stepLabel })),
+      faqs: FAQS,
+    };
+    void db.content_feeds.get("public-landing-home").then(async (cached) => {
+      if (cached?.content && typeof cached.content === "object") {
+        const content = cached.content as Partial<LandingCopy>;
+        if (Array.isArray(content.howItWorks) && Array.isArray(content.faqs)) {
+          setLandingCopy({ howItWorks: content.howItWorks as LandingCopy["howItWorks"], faqs: content.faqs as LandingCopy["faqs"] });
+          return;
+        }
+      }
+      setLandingCopy(defaultLandingContent);
+      await db.content_feeds.put({
+        id: "public-landing-home",
+        title: "Déloci home page",
+        content: defaultLandingContent,
+        cached_at: new Date().toISOString(),
+      });
+    }).catch((error: unknown) => console.warn("Could not load public landing content cache:", error));
+
     const savedPhone = localStorage.getItem("loci_user_phone");
     const savedPhoneFrameId = savedPhone
       ? window.requestAnimationFrame(() => setUserPhone(savedPhone))
@@ -357,11 +390,11 @@ export default function Home() {
             <div className="relative pl-2 sm:pl-4 space-y-8">
               <div className="absolute left-5.75 sm:left-7.75 top-6 bottom-6 w-0.5 bg-yellow-400/50 dark:bg-yellow-400/30" />
 
-              {HOW_IT_WORKS_STEPS.map((step, idx) => (
+              {(landingCopy?.howItWorks || HOW_IT_WORKS_STEPS).map((step, idx) => (
                 <ScrollReveal key={idx} delay={idx * 0.1}>
                   <div className="flex items-start gap-4 sm:gap-6 relative z-10">
                     <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-yellow-400 text-black flex items-center justify-center shrink-0 border-4 border-white dark:border-black shadow-md">
-                      {step.icon}
+                      {HOW_IT_WORKS_STEPS[idx]?.icon}
                     </div>
 
                     <div className="pt-1 space-y-1">
@@ -440,7 +473,7 @@ export default function Home() {
             </div>
 
             <div className="space-y-4">
-              {FAQS.map((faq, idx) => {
+              {(landingCopy?.faqs || FAQS).map((faq, idx) => {
                 const isOpen = openFaqIndex === idx;
                 return (
                   <div

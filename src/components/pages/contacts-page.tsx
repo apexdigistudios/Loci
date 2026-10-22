@@ -35,7 +35,7 @@ export interface Contact {
   contact_user_id?: string;
   name: string;
   phone: string;
-  group_category?: string;
+  group_category?: string | null;
   isLociUser?: boolean;
   avatar_url?: string;
 }

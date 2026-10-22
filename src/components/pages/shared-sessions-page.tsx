@@ -16,6 +16,7 @@ import {
   Lock,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { db } from "@/lib/db";
 import { SatelliteMap } from "../ui/satellite-map";
 import { cleanPhone } from "@/lib/utils";
 import { useSubscription } from "@/hooks/use-subscription";
@@ -24,7 +25,7 @@ export interface Contact {
   id: string;
   name: string;
   phone: string;
-  group_category?: string;
+  group_category?: string | null;
   isLociUser?: boolean;
   avatar_url?: string;
 }
@@ -134,7 +135,14 @@ export function SharedSessionsPage({
   useEffect(() => {
     if (!currentUserId && !userPhone) return;
     async function fetchMyProfile() {
-      let query = supabase.from("users").select("nickname, full_name, avatar_url");
+      const cached = currentUserId
+        ? await db.users.get(currentUserId)
+        : await db.users.where("phone").equals(cleanPhone(userPhone)).first();
+      if (cached) {
+        setCurrentUserProfile({ nickname: cached.nickname || cached.full_name || "You", avatar_url: cached.avatar_url || undefined });
+      }
+      if (!navigator.onLine) return;
+      let query = supabase.from("users").select("id, phone, nickname, full_name, avatar_url");
       if (currentUserId) {
         query = query.eq("id", currentUserId);
       } else {
@@ -145,6 +153,14 @@ export function SharedSessionsPage({
         setCurrentUserProfile({
           nickname: data.nickname || data.full_name || "You",
           avatar_url: data.avatar_url,
+        });
+        await db.users.put({
+          id: data.id,
+          phone: cleanPhone(data.phone),
+          nickname: data.nickname,
+          full_name: data.full_name,
+          avatar_url: data.avatar_url,
+          cached_at: new Date().toISOString(),
         });
       }
     }
@@ -164,15 +180,33 @@ export function SharedSessionsPage({
   }, []);
 
   const fetchSharedSessions = useCallback(async () => {
-    setSessionsLoading(true);
-    try {
-      const currentUserPhone = cleanPhone(userPhone);
+    const currentUserPhone = cleanPhone(userPhone);
+    const cachedSessions = await db.checkin_sessions.toArray();
+    const scopedCachedSessions = cachedSessions.filter((session) => session.scope_phone === currentUserPhone);
+    if (scopedCachedSessions.length > 0) {
+      setSharedSessions(scopedCachedSessions.filter((session) =>
+        session.status === "active" || session.status === "escalated" || session.status === "missed"
+      ) as SharedSession[]);
+      setHistorySessions(scopedCachedSessions.filter((session) =>
+        session.status === "completed" || session.status === "expired"
+      ) as SharedSession[]);
+      setSessionsLoading(false);
+    } else if (navigator.onLine) {
+      setSessionsLoading(true);
+    } else {
+      setSessionsLoading(false);
+    }
+    if (!navigator.onLine) return;
 
+    try {
       const { data: recipientData, error: recipErr } = await supabase
         .from("session_recipients")
         .select("session_id, recipient_phone, contact_phone");
 
-      if (recipErr) console.error("Error fetching session recipients:", recipErr);
+      if (recipErr) {
+        console.error("Error fetching session recipients:", recipErr);
+        return;
+      }
 
       const matchedRecipientIds = Array.from(
         new Set(
@@ -206,6 +240,7 @@ export function SharedSessionsPage({
         .order("created_at", { ascending: false });
 
       if (sessionsErr) console.error("Error fetching sessions:", sessionsErr);
+      if (sessionsErr) return;
 
       const allSessions = sessionsData || [];
 
@@ -216,13 +251,23 @@ export function SharedSessionsPage({
         new Set(allSessions.map((session) => session.user_phone as string).filter(Boolean))
       );
 
-      let usersData: Array<{ phone: string; nickname?: string; full_name?: string; avatar_url?: string }> = [];
+      let usersData: Array<{ id: string; phone: string; nickname?: string; full_name?: string; avatar_url?: string }> = [];
       if (senderPhones.length > 0) {
         const { data: uData } = await supabase
           .from("users")
-          .select("phone, nickname, full_name, avatar_url")
+          .select("id, phone, nickname, full_name, avatar_url")
           .in("phone", senderPhones);
         usersData = uData || [];
+        if (usersData.length > 0) {
+          await db.users.bulkPut(usersData.map((user) => ({
+            id: user.id,
+            phone: cleanPhone(user.phone),
+            nickname: user.nickname,
+            full_name: user.full_name,
+            avatar_url: user.avatar_url,
+            cached_at: new Date().toISOString(),
+          })));
+        }
       }
 
       const formatSession = (session: Record<string, unknown>) => {
@@ -242,6 +287,18 @@ export function SharedSessionsPage({
 
       setSharedSessions(formattedActive);
       setHistorySessions(formattedHistory);
+      await db.transaction("rw", db.checkin_sessions, async () => {
+        const existing = await db.checkin_sessions.where("scope_phone").equals(currentUserPhone).toArray();
+        const nextIds = new Set(allSessions.map((session) => String(session.id)));
+        const staleIds = existing
+          .filter((session) => !nextIds.has(session.id))
+          .map((session) => session.id);
+        if (staleIds.length > 0) await db.checkin_sessions.bulkDelete(staleIds);
+        await db.checkin_sessions.bulkPut(allSessions.map((session) => ({
+          ...formatSession(session as unknown as Record<string, unknown>),
+          scope_phone: currentUserPhone,
+        })) as unknown as import("@/lib/db").OfflineSession[]);
+      });
     } catch (err) {
       console.error("Error fetching shared sessions:", err);
     } finally {
@@ -252,6 +309,8 @@ export function SharedSessionsPage({
   // Real-time Supabase subscription with safe deep-merging of coordinates & metadata
   useEffect(() => {
     const loadTimer = window.setTimeout(() => void fetchSharedSessions(), 0);
+    const refreshOnline = () => void fetchSharedSessions();
+    window.addEventListener("online", refreshOnline);
 
     const channel = supabase
       .channel("checkin_sessions_realtime_feed")
@@ -316,6 +375,7 @@ export function SharedSessionsPage({
 
     return () => {
       window.clearTimeout(loadTimer);
+      window.removeEventListener("online", refreshOnline);
       supabase.removeChannel(channel);
     };
   }, [fetchSharedSessions]);

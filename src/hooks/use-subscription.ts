@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { cleanPhone } from "@/lib/utils";
+import { db } from "@/lib/db";
 
 export type SubscriptionTier = "free" | "plus";
 
@@ -12,7 +13,20 @@ export function useSubscription(userId?: string | null, userPhone?: string | nul
     let cancelled = false;
 
     async function fetchSubscription() {
-      setLoading(true);
+      const cachedUser = userPhone
+        ? await db.users.where("phone").equals(cleanPhone(userPhone)).first()
+        : userId ? await db.users.get(userId) : undefined;
+      if (cachedUser) {
+        const cachedTier = (cachedUser?.subscription_tier || cachedUser?.tier || "").toLowerCase();
+        if (cachedTier === "plus" || cachedTier === "free") {
+          if (!cancelled) {
+            setTier(cachedTier);
+            setLoading(false);
+          }
+        }
+      }
+      if (!navigator.onLine) return;
+      if (!cancelled) setLoading(true);
       console.log("🔍 [useSubscription] Checking tier for userId:", userId, "userPhone:", userPhone);
       try {
         let targetUserId = userId;
@@ -35,6 +49,15 @@ export function useSubscription(userId?: string | null, userPhone?: string | nul
             if (!cancelled) { setTier("plus"); setLoading(false); }
             return;
           }
+          if (userData?.id) {
+            await db.users.put({
+              id: userData.id,
+              phone: cleanPhone(userPhone),
+              subscription_tier: userData.subscription_tier,
+              tier: userData.tier,
+              cached_at: new Date().toISOString(),
+            });
+          }
         }
 
         if (!targetUserId) {
@@ -53,10 +76,13 @@ export function useSubscription(userId?: string | null, userPhone?: string | nul
 
         if (subData && subData.length > 0) {
           const hasPlus = subData.some(
-            (row: any) =>
+            (row: { tier?: string | null; status?: string | null }) =>
               row.tier?.toLowerCase() === "plus" || row.status?.toLowerCase() === "active"
           );
           if (hasPlus) {
+            if (userPhone) {
+              await db.users.update(targetUserId, { subscription_tier: "plus", cached_at: new Date().toISOString() });
+            }
             console.log("✨ [useSubscription] Plus tier confirmed via subscriptions table!");
             if (!cancelled) { setTier("plus"); setLoading(false); }
             return;
@@ -72,6 +98,11 @@ export function useSubscription(userId?: string | null, userPhone?: string | nul
 
         console.log("🔍 [useSubscription] User record query result:", userRec, "Error:", userRecErr);
         const userRecTier = (userRec?.subscription_tier || userRec?.tier || "").toLowerCase();
+        await db.users.update(targetUserId, {
+          subscription_tier: userRec?.subscription_tier,
+          tier: userRec?.tier,
+          cached_at: new Date().toISOString(),
+        });
         if (userRecTier === "plus") {
           console.log("✨ [useSubscription] Plus tier confirmed via users table record!");
           if (!cancelled) { setTier("plus"); setLoading(false); }

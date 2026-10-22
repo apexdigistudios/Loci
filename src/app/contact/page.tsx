@@ -35,8 +35,8 @@ export default function ContactPage() {
 
         <p className="text-sm sm:text-base text-zinc-600 dark:text-zinc-400 leading-relaxed border-b border-zinc-200 dark:border-zinc-800 pb-8">
           Have questions about watch sessions, background notification permissions, or account settings? Get in touch with our team directly at{" "}
-          <a href="mailto:support@deloci.online" className="text-yellow-600 dark:text-yellow-400 font-medium underline">
-            support@deloci.online
+          <a href="mailto:hello.deloci@gmail.com" className="text-yellow-600 dark:text-yellow-400 font-medium underline">
+            hello.deloci@gmail.com
           </a>.
         </p>
 
@@ -47,7 +47,7 @@ export default function ContactPage() {
               1. General Inquiries & Feedback
             </h2>
             <p>
-              For general questions regarding the Déloci platform, feature suggestions, or user feedback, reach out to us via email at <strong>support@deloci.online</strong>. We review all user communications to continuously refine our safety experience.
+              For general questions regarding the Déloci platform, feature suggestions, or user feedback, reach out to us via email at <strong>hello.deloci@gmail.com</strong>. We review all user communications to continuously refine our safety experience.
             </p>
           </section>
 
@@ -70,7 +70,7 @@ export default function ContactPage() {
               3. Data Privacy & Account Requests
             </h2>
             <p>
-              To request account data removal, session history purges, or inquiries regarding our Row-Level Security storage, send an email with the subject line <strong>Data Privacy Request</strong> to support@deloci.online.
+              To request account data removal, session history purges, or inquiries regarding our Row-Level Security storage, send an email with the subject line <strong>Data Privacy Request</strong> to hello.deloci@gmail.com.
             </p>
           </section>
 

@@ -23,6 +23,7 @@ create table if not exists public.trusted_contacts (
 
 create table if not exists public.checkin_sessions (
   id uuid primary key default gen_random_uuid(),
+  client_mutation_id text,
   user_id uuid references public.users(id) on delete cascade,
   user_phone text not null references public.users(phone) on delete cascade,
   destination text not null,
@@ -46,6 +47,7 @@ create table if not exists public.checkin_sessions (
 );
 
 alter table public.checkin_sessions
+  add column if not exists client_mutation_id text,
   add column if not exists user_id uuid references public.users(id) on delete cascade,
   add column if not exists metadata jsonb not null default '{}'::jsonb,
   add column if not exists user_reminder_mins integer not null default 15,
@@ -55,6 +57,10 @@ alter table public.checkin_sessions
   add column if not exists session_started_push_sent_at timestamptz,
   add column if not exists session_completed_push_sent_at timestamptz,
   add column if not exists guardian_alert_sent_at timestamptz;
+
+create unique index if not exists checkin_sessions_client_mutation_id_idx
+  on public.checkin_sessions(client_mutation_id)
+  where client_mutation_id is not null;
 
 update public.checkin_sessions as sessions
 set user_id = users.id

@@ -5,6 +5,14 @@ import { flushOfflineQueue } from "@/lib/offline-sync";
 
 export function OfflineSyncProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
+    if ("storage" in navigator && navigator.storage?.persist) {
+      void navigator.storage.persist().then((granted) => {
+        if (!granted) console.info("Persistent storage was not granted; offline data remains subject to browser eviction.");
+      }).catch((error: unknown) => {
+        console.warn("Could not request persistent browser storage:", error);
+      });
+    }
+
     // Flush queued actions on app launch
     void flushOfflineQueue();
 
