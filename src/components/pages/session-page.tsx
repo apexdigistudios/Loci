@@ -114,6 +114,7 @@ export function SessionPage({
   const [actionMessage, setActionMessage] = useState("");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(undefined);
 
+  // Staged & Confirmed Media (WhatsApp style full-screen preview)
   const [stagedMedia, setStagedMedia] = useState<{
     file: File;
     previewUrl: string;
@@ -129,6 +130,7 @@ export function SessionPage({
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [isMapFullScreen, setIsMapFullScreen] = useState(false);
 
+  // SOS modal state
   const [showSosModal, setShowSosModal] = useState(false);
   const [sosSending, setSosSending] = useState(false);
 
@@ -203,6 +205,7 @@ export function SessionPage({
     [contacts]
   );
 
+  // Auto-detect country and fetch readable address name from user GPS coordinates
   useEffect(() => {
     if (!locationCoords) return;
     const fetchLocationDetails = async () => {
@@ -224,6 +227,7 @@ export function SessionPage({
     void fetchLocationDetails();
   }, [locationCoords]);
 
+  // Destination autocomplete with detected country restriction
   useEffect(() => {
     if (!destination || destination.trim().length < 2 || !showSuggestions) {
       const frameId = window.requestAnimationFrame(() => setSuggestions([]));
@@ -240,6 +244,14 @@ export function SessionPage({
 
         if (detectedCountryCode) {
           url += `&countrycodes=${detectedCountryCode}`;
+        }
+
+        if (locationCoords && !detectedCountryCode) {
+          const minLon = locationCoords.longitude - 3;
+          const maxLat = locationCoords.latitude + 3;
+          const maxLon = locationCoords.longitude + 3;
+          const minLat = locationCoords.latitude - 3;
+          url += `&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=0`;
         }
 
         const res = await fetch(url, { signal: controller.signal });
@@ -260,7 +272,7 @@ export function SessionPage({
       controller.abort();
       clearTimeout(timer);
     };
-  }, [destination, showSuggestions, detectedCountryCode]);
+  }, [destination, showSuggestions, locationCoords, detectedCountryCode]);
 
   const requestCurrentLocation = useCallback(() => {
     if (!navigator.geolocation) {
@@ -315,7 +327,7 @@ export function SessionPage({
     if (!activeSession) return;
 
     const sosInterval = setInterval(() => {
-      if (navigator.geolocation) {
+      if (navigator.geolocation && !manuallyPickedLocationRef.current) {
         navigator.geolocation.getCurrentPosition(async ({ coords }) => {
           const latitude = coords.latitude;
           const longitude = coords.longitude;
@@ -339,7 +351,7 @@ export function SessionPage({
           }
         }, (err) => console.error("Continuous location broadcast error:", err), { enableHighAccuracy: true });
       }
-    }, 4000); // Polls and syncs every 4 seconds
+    }, 4000);
 
     return () => clearInterval(sosInterval);
   }, [activeSession, locationAddress]);
@@ -390,6 +402,33 @@ export function SessionPage({
         });
     }
   };
+
+  useEffect(() => {
+    if (!activeSession || !("wakeLock" in navigator)) return;
+
+    let disposed = false;
+    const acquireWakeLock = async () => {
+      if (disposed || document.visibilityState !== "visible") return;
+      try {
+        wakeLockRef.current = await navigator.wakeLock.request("screen");
+      } catch (error) {
+        console.warn("Screen Wake Lock unavailable:", error);
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && !wakeLockRef.current) void acquireWakeLock();
+    };
+
+    void acquireWakeLock();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      const lock = wakeLockRef.current;
+      wakeLockRef.current = null;
+      if (lock) void lock.release();
+    };
+  }, [activeSession]);
 
   const dayOptions = useMemo(() => {
     const options = [];
@@ -452,6 +491,84 @@ export function SessionPage({
     activeSession.last_user_checkin_at || activeSession.expected_arrival_at
   ).getTime() >= (activeSession.user_reminder_mins || 15) * 60000;
 
+  useEffect(() => {
+    if (!activeSession || activeSession.status !== "active") return;
+
+    if (alertedSessionIdRef.current !== activeSession.id) {
+      alertedSessionIdRef.current = activeSession.id;
+      lastCheckinPushRef.current = 0;
+      lastExpiryPushRef.current = false;
+      lastGuardianOverduePushRef.current = false;
+    }
+
+    const evaluateSafetyAlerts = () => {
+      const now = Date.now();
+      const lastCheckinAt = new Date(
+        activeSession.last_user_checkin_at || activeSession.expected_arrival_at
+      ).getTime();
+      const reminderInterval = (activeSession.user_reminder_mins || 15) * 60000;
+
+      if (Number.isFinite(lastCheckinAt) && now - lastCheckinAt >= reminderInterval
+        && now - lastCheckinPushRef.current > 120000) {
+        lastCheckinPushRef.current = now;
+        void dispatchAlert({
+          userIds: userId || "",
+          title: "Safety Check-In Required",
+          message: `Please confirm you are safe on your trip to ${activeSession.destination || "your destination"}.`,
+          type: "checkin",
+          sessionId: activeSession.id,
+        });
+      }
+
+      const expectedArrival = new Date(activeSession.expected_arrival_at).getTime();
+      if (Number.isFinite(expectedArrival) && now >= expectedArrival && !lastExpiryPushRef.current) {
+        lastExpiryPushRef.current = true;
+        void dispatchAlert({
+          userIds: userId || "",
+          title: "Expected Arrival Time Reached",
+          message: "Your session target arrival time has passed.",
+          type: "emergency",
+          sessionId: activeSession.id,
+        });
+      }
+
+      const guardianGraceMins = activeSession.contact_reminder_mins || 30;
+      const guardianAlertTime = expectedArrival + guardianGraceMins * 60000;
+      if (Number.isFinite(guardianAlertTime) && now >= guardianAlertTime && !lastGuardianOverduePushRef.current) {
+        lastGuardianOverduePushRef.current = true;
+        void dispatchAlert({
+          userIds: userId || "",
+          title: "Guardian Alert Escalated",
+          message: "You have not ended your session. Your guardians have been alerted.",
+          type: "guardian_alert",
+          sessionId: activeSession.id,
+        });
+        void dispatchAlert({
+          userIds: guardianUserIds,
+          title: "Emergency: Session Overdue",
+          message: `Safety session to ${activeSession.destination || "destination"} is overdue and its grace period expired without a safe check-in.`,
+          type: "emergency",
+          url: "/main?tab=contacts",
+          sessionId: activeSession.id,
+          metadata: { destination: activeSession.destination, address: locationAddress },
+        });
+      }
+    };
+
+    const evaluateWhenVisible = () => {
+      if (document.visibilityState === "visible") evaluateSafetyAlerts();
+    };
+    evaluateSafetyAlerts();
+    const interval = window.setInterval(evaluateSafetyAlerts, 15000);
+    document.addEventListener("visibilitychange", evaluateWhenVisible);
+    window.addEventListener("focus", evaluateSafetyAlerts);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", evaluateWhenVisible);
+      window.removeEventListener("focus", evaluateSafetyAlerts);
+    };
+  }, [activeSession, userId, guardianUserIds, locationAddress]);
+
   const handleCheckInClick = async () => {
     if (isCheckingIn) return;
     setIsCheckingIn(true);
@@ -463,8 +580,30 @@ export function SessionPage({
         setActionMessage("We couldn’t save your check-in. Check your connection and try again. Your session is still active.");
         return;
       }
+
+      void dispatchAlert({
+        userIds: userId || "",
+        title: "Check-In Confirmed",
+        message: "You have successfully confirmed you are safe.",
+        type: "checkin",
+        sessionId: activeSession?.id,
+      });
+
+      if (guardianUserIds.length > 0) {
+        void dispatchAlert({
+          userIds: guardianUserIds,
+          title: "Guardian Check-In Update",
+          message: `Your contact has checked in safely for their trip to ${activeSession?.destination || "their destination"}.`,
+          type: "checkin",
+          url: "/main?tab=contacts",
+          sessionId: activeSession?.id,
+          playFeedback: false,
+          showLocal: false,
+        });
+      }
     } catch (error) {
       console.error("Check-in action failed:", error);
+      setActionMessage("We couldn’t save your check-in just now. Please try again. Your session is still active.");
     } finally {
       setTimeout(() => setIsCheckingIn(false), 800);
     }
@@ -473,9 +612,36 @@ export function SessionPage({
   const onEndSessionClick = async () => {
     setActionMessage("");
     try {
-      await Promise.resolve(handleCompleteSession());
+      const sessionEnded = await Promise.resolve(handleCompleteSession());
+      if (sessionEnded === false) {
+        setActionMessage("We couldn’t end your session just now. Check your connection and try again.");
+        return;
+      }
     } catch (error) {
       console.error("Session end action failed:", error);
+      setActionMessage("We couldn’t end your session just now. Please try again.");
+      return;
+    }
+
+    void dispatchAlert({
+      userIds: userId || "",
+      title: "Session Ended Successfully",
+      message: "Your safety watch session has been completed and closed.",
+      type: "session_end",
+      sessionId: activeSession?.id,
+    });
+
+    if (guardianUserIds.length > 0) {
+      void dispatchAlert({
+        userIds: guardianUserIds,
+        title: "Session Ended Safely",
+        message: `The safety session heading to ${activeSession?.destination || destination || "destination"} has ended.`,
+        type: "session_end",
+        url: "/main?tab=contacts",
+        sessionId: activeSession?.id,
+        playFeedback: false,
+        showLocal: false,
+      });
     }
   };
 
@@ -565,6 +731,23 @@ export function SessionPage({
         },
       });
 
+      if (guardianUserIds.length > 0) {
+        void dispatchAlert({
+          userIds: guardianUserIds,
+          title: "🚨 EMERGENCY SOS FROM GUARDIAN",
+          message: sosMessage,
+          type: "emergency",
+          url: "/main?tab=contacts",
+          sessionId: targetSessionId,
+          metadata: {
+            latitude: locationCoords?.latitude,
+            longitude: locationCoords?.longitude,
+            address: locationAddress,
+            is_sos: true,
+          },
+        });
+      }
+
       setActionMessage("Emergency SOS broadcasted successfully with your live location!");
       setShowSosModal(false);
     } catch (err) {
@@ -607,6 +790,21 @@ export function SessionPage({
       }, 100);
     } catch (err) {
       console.error("Camera access error:", err);
+      const fallbackInput = document.createElement("input");
+      fallbackInput.type = "file";
+      fallbackInput.accept = "image/*";
+      fallbackInput.setAttribute("capture", "user");
+      fallbackInput.onchange = (e: Event) => {
+        const file = (e.target as HTMLInputElement).files?.[0];
+        if (file) {
+          setStagedMedia({
+            file,
+            previewUrl: URL.createObjectURL(file),
+            type: "image",
+          });
+        }
+      };
+      fallbackInput.click();
     }
   };
 
@@ -671,12 +869,16 @@ export function SessionPage({
 
   const handleNextStep = (e?: React.MouseEvent) => {
     if (e) e.preventDefault();
+
     if (currentStep === 1 && !destination.trim()) {
       setActionMessage("Add a destination to continue.");
       return;
     }
+
     setActionMessage("");
-    if (currentStep < 4) setCurrentStep((s) => s + 1);
+    if (currentStep < 4) {
+      setCurrentStep((s) => s + 1);
+    }
   };
 
   const executeStartSession = async (event: React.FormEvent) => {
@@ -690,11 +892,23 @@ export function SessionPage({
     }
 
     setActionMessage("");
-    if (userId) {
-      await subscribeUserToPush(userId);
+    let notificationMessage = "";
+    try {
+      if (userId) {
+        const result = await subscribeUserToPush(userId);
+        if (!result.ok) notificationMessage = result.reason || "Notifications couldn’t be enabled. You can turn them on later in Settings.";
+      }
+    } catch (error) {
+      console.error("Push permission or subscription failed:", error);
+      notificationMessage = "We couldn’t enable notifications right now. You can turn them on later in Settings.";
     }
 
-    await Promise.resolve(handleStartSession(event, locationCoords || undefined));
+    const started = await Promise.resolve(handleStartSession(event, locationCoords || undefined));
+    if (started === false) {
+      setActionMessage("Your session is running on this device, but it couldn’t sync with your contacts. Check your connection before relying on contact alerts.");
+    } else if (notificationMessage) {
+      setActionMessage(`${notificationMessage} Your session can still continue.`);
+    }
   };
 
   const selectSuggestion = (item: SuggestionItem) => {
@@ -712,6 +926,7 @@ export function SessionPage({
         </div>
       )}
 
+      {/* WHATSAPP-STYLE FULL SCREEN MEDIA PREVIEW SHEET */}
       {stagedMedia && (
         <div className="fixed inset-0 z-99999 bg-black flex flex-col justify-between p-4 max-w-md mx-auto animate-in fade-in">
           <div className="flex items-center justify-between pt-[max(0.75rem,env(safe-area-inset-top))] z-10 px-2">
@@ -752,6 +967,7 @@ export function SessionPage({
         </div>
       )}
 
+      {/* CAMERA OVERLAY */}
       {isCameraActive && (
         <div className="fixed inset-0 z-100 bg-black flex flex-col justify-between p-4 max-w-md mx-auto">
           <div className="flex items-center justify-between pt-[max(0.75rem,env(safe-area-inset-top))] z-10 px-2">
@@ -759,6 +975,7 @@ export function SessionPage({
               type="button"
               onClick={stopCamera}
               className="p-3 rounded-full bg-zinc-900/80 text-white backdrop-blur-xl active:scale-90 transition-all border border-zinc-800"
+              title="Close Camera"
             >
               <X className="w-5 h-5" />
             </button>
@@ -792,6 +1009,7 @@ export function SessionPage({
         </div>
       )}
 
+      {/* THEME-ADAPTIVE SOS CONFIRMATION MODAL */}
       {showSosModal && (
         <div className="fixed inset-0 z-99999 bg-black/60 dark:bg-black/70 backdrop-blur-md flex items-center justify-center p-4 transition-colors">
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 w-full max-w-xs space-y-4 text-center shadow-2xl">
@@ -825,6 +1043,7 @@ export function SessionPage({
         </div>
       )}
 
+      {/* ACTIVE WATCH PAGEVIEW */}
       {activeSession ? (
         <div className="pt-2 space-y-6 min-h-[82vh] flex flex-col justify-between max-w-md mx-auto">
           <div className="space-y-6">
@@ -847,6 +1066,7 @@ export function SessionPage({
               </button>
             </div>
 
+            {/* Recipient Details */}
             <div className="flex items-center space-x-3 px-3 py-3 rounded-2xl bg-zinc-100/80 dark:bg-zinc-900/80 border border-zinc-200/60 dark:border-zinc-800">
               {sharedContacts.length === 0 ? (
                 <div className="w-12 h-12 rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center shrink-0">
@@ -859,6 +1079,13 @@ export function SessionPage({
                   ) : (
                     sharedContacts[0].name.slice(0, 2)
                   )}
+                  <div className="absolute bottom-0 right-0 w-4 h-4 rounded-full bg-black border border-zinc-800 flex items-center justify-center">
+                    {sharedContacts[0].isLociUser ? (
+                      <Zap className="w-3 h-3 text-yellow-400 fill-yellow-400" />
+                    ) : (
+                      <MessageSquare className="w-2.5 h-2.5 text-zinc-400" />
+                    )}
+                  </div>
                 </div>
               )}
               <div className="min-w-0 flex-1">
@@ -913,7 +1140,11 @@ export function SessionPage({
                           ? locationAddress
                           : locationCoords
                             ? `${locationCoords.latitude.toFixed(5)}, ${locationCoords.longitude.toFixed(5)}`
-                            : "Acquiring High-Precision GPS..."}
+                            : locationStatus === "denied"
+                              ? "Location permission unavailable"
+                              : locationStatus === "requesting" || locationStatus === "idle"
+                                ? "Acquiring High-Precision GPS..."
+                                : "Waiting for GPS permission"}
                       </p>
                     </div>
                   </div>
@@ -922,9 +1153,25 @@ export function SessionPage({
                     onClick={requestCurrentLocation}
                     className="shrink-0 text-[10px] font-extrabold text-black dark:text-white px-3 py-2 rounded-full bg-yellow-400 hover:bg-yellow-300 transition-colors"
                   >
-                    Refresh
+                    {locationStatus === "low-accuracy"
+                      ? "Enable high accuracy"
+                      : locationStatus === "requesting"
+                        ? "Acquiring..."
+                        : locationStatus === "granted"
+                          ? "Refresh"
+                          : "Enable location"}
                   </button>
                 </div>
+                {locationStatus === "low-accuracy" && (
+                  <p className="px-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                    GPS accuracy is over 500 m. Enable precise location in settings.
+                  </p>
+                )}
+                {locationUpdatedAt && (
+                  <p className="text-[9px] text-zinc-400">
+                    Updated {locationUpdatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} (Auto-refreshes every 5m)
+                  </p>
+                )}
               </div>
 
               {locationCoords && (
@@ -952,6 +1199,7 @@ export function SessionPage({
             </div>
           </div>
 
+          {/* THEME-ADAPTIVE MOBILE-SIZED EXPANDED MAP MODAL */}
           {isMapFullScreen && locationCoords && (
             <div className="fixed inset-0 z-99999 bg-white/95 dark:bg-black/90 backdrop-blur-md flex items-center justify-center p-3 transition-colors">
               <div className="w-full max-w-md h-[90vh] bg-zinc-100 dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 flex flex-col justify-between overflow-hidden p-3 shadow-2xl">
@@ -989,11 +1237,16 @@ export function SessionPage({
               disabled={sessionLoading}
               className="w-full bg-red-600 hover:bg-red-700 text-white font-extrabold py-4 rounded-full text-xs transition-all flex items-center justify-center space-x-2 active:scale-95 shadow-lg shadow-red-600/20"
             >
-              {sessionLoading ? <Loader2 className="w-5 h-5 animate-spin text-white" /> : <span>End Session</span>}
+              {sessionLoading ? (
+                <Loader2 className="w-5 h-5 animate-spin text-white" />
+              ) : (
+                <span>End Session</span>
+              )}
             </button>
           </div>
         </div>
       ) : (
+        /* WIZARD PAGEVIEW */
         <div className="pt-[max(0.5rem,env(safe-area-inset-top))] space-y-4 max-w-md mx-auto min-h-[82vh] flex flex-col justify-between">
           <input
             ref={galleryInputRef}
@@ -1003,6 +1256,7 @@ export function SessionPage({
             className="hidden"
           />
 
+          {/* Header & Step Indicator */}
           <div className="space-y-3">
             <div className="flex items-center justify-between pt-1">
               <button
@@ -1011,12 +1265,16 @@ export function SessionPage({
                   if (currentStep > 1) setCurrentStep((s) => s - 1);
                   else onNavigate("home");
                 }}
-                className="p-2.5 rounded-full bg-zinc-200/70 dark:bg-zinc-800/85 backdrop-blur-xl text-black dark:text-white active:scale-90 transition-all shadow-sm border border-zinc-300/40 dark:border-zinc-800/50"
+                className="p-2.5 rounded-full bg-zinc-200/70 dark:bg-zinc-800/80 backdrop-blur-xl text-black dark:text-white active:scale-90 transition-all shadow-sm border border-zinc-300/40 dark:border-zinc-800/50"
               >
                 <ChevronLeft className="w-5 h-5 stroke-[2.5]" />
               </button>
 
-              <img src={sessionHeadingSrc} alt="Session Heading" className="h-10 w-auto object-contain" />
+              <img
+                src={sessionHeadingSrc}
+                alt="Session Heading"
+                className="h-10 w-auto object-contain"
+              />
 
               <div className="w-9" />
             </div>
@@ -1045,11 +1303,13 @@ export function SessionPage({
           </div>
 
           <div className="flex-1 flex flex-col justify-between">
+            {/* Sliding Container */}
             <div className="overflow-hidden relative flex-1 py-2">
               <div
                 className="flex transition-transform duration-300 ease-out h-full"
                 style={{ transform: `translateX(-${(currentStep - 1) * 100}%)` }}
               >
+                {/* STEP 1: DESTINATION & MAP */}
                 <div className="w-full shrink-0 space-y-5 px-1">
                   <div className="space-y-1">
                     <h2 className="text-lg font-black text-black dark:text-white flex items-center gap-2">
@@ -1057,7 +1317,7 @@ export function SessionPage({
                       <MapPin className="w-5 h-5 text-yellow-400" />
                     </h2>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      Specify your destination address and set departure GPS.
+                      Specify your destination address in your detected country and set departure GPS.
                     </p>
                   </div>
 
@@ -1078,7 +1338,9 @@ export function SessionPage({
                         onFocus={() => setShowSuggestions(true)}
                         className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl pl-11 pr-10 py-4 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400 transition-all shadow-inner"
                       />
-                      {isFetchingSuggestions && <Loader2 className="w-4 h-4 absolute right-4 text-yellow-500 animate-spin z-10" />}
+                      {isFetchingSuggestions && (
+                        <Loader2 className="w-4 h-4 absolute right-4 text-yellow-500 animate-spin z-10" />
+                      )}
                     </div>
 
                     {showSuggestions && suggestions.length > 0 && (
@@ -1103,15 +1365,17 @@ export function SessionPage({
                       <div className="min-w-0">
                         <p className="text-xs font-extrabold text-black dark:text-white">Starting Pin Location</p>
                         <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">
-                          {locationCoords ? `${locationCoords.latitude.toFixed(5)}, ${locationCoords.longitude.toFixed(5)}` : "Enable GPS"}
+                          {locationCoords
+                            ? `${locationCoords.latitude.toFixed(5)}, ${locationCoords.longitude.toFixed(5)}`
+                            : "Enable GPS to capture departure point"}
                         </p>
                       </div>
                       <button
                         type="button"
                         onClick={requestCurrentLocation}
-                        className="shrink-0 bg-yellow-400 text-black font-extrabold px-3.5 py-2 rounded-full text-[10px]"
+                        className="shrink-0 bg-yellow-400 text-black font-extrabold px-3.5 py-2 rounded-full text-[10px] active:scale-95 transition-all shadow-sm"
                       >
-                        Use device GPS
+                        {locationStatus === "requesting" ? "Acquiring..." : "Use device GPS"}
                       </button>
                     </div>
 
@@ -1129,25 +1393,37 @@ export function SessionPage({
                   </div>
                 </div>
 
+                {/* STEP 2: RETURN TIME & DAY */}
                 <div className="w-full shrink-0 space-y-5 px-1">
                   <div className="space-y-1">
                     <h2 className="text-lg font-black text-black dark:text-white flex items-center gap-2">
                       <span>When are you returning?</span>
                       <Clock className="w-5 h-5 text-yellow-400" />
                     </h2>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      Pick your return day and target arrival time {tier === "free" ? "(Max 1 day for Free users)" : "(Unlimited for Plus)"}.
+                    </p>
                   </div>
 
                   <div className="space-y-3">
-                    <label className="block text-xs font-extrabold text-black dark:text-white">Expected Return Day</label>
+                    <label className="block text-xs font-extrabold text-black dark:text-white">
+                      Expected Return Day
+                    </label>
                     <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
                       {dayOptions.map((opt) => (
                         <button
                           key={opt.offset}
                           type="button"
-                          onClick={() => setSelectedDayOffset(opt.offset)}
-                          className={`px-3.5 py-2.5 rounded-2xl text-xs font-extrabold shrink-0 border ${
+                          onClick={() => {
+                            if (tier === "free" && opt.offset > 0) {
+                              setActionMessage("Free users are limited to 1-day sessions. Upgrade to Plus for multi-day sessions!");
+                              return;
+                            }
+                            setSelectedDayOffset(opt.offset);
+                          }}
+                          className={`px-3.5 py-2.5 rounded-2xl text-xs font-extrabold shrink-0 transition-all border ${
                             selectedDayOffset === opt.offset
-                              ? "bg-yellow-400 text-black border-yellow-400"
+                              ? "bg-yellow-400 text-black border-yellow-400 shadow-md shadow-yellow-400/20 scale-105"
                               : "bg-zinc-200/60 dark:bg-zinc-900/80 text-zinc-600 dark:text-zinc-400 border-zinc-300/50 dark:border-zinc-800"
                           }`}
                         >
@@ -1158,112 +1434,275 @@ export function SessionPage({
                   </div>
 
                   <div className="space-y-2">
-                    <label className="block text-xs font-extrabold text-black dark:text-white">Return Time</label>
-                    <input
-                      type="time"
-                      value={returnTimeStr}
-                      onChange={(e) => setReturnTimeStr(e.target.value)}
-                      className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl px-4 py-4 text-xs font-extrabold text-black dark:text-white"
-                    />
+                    <label className="block text-xs font-extrabold text-black dark:text-white">
+                      Return Time
+                    </label>
+                    <div className="relative flex items-center">
+                      <Clock className="w-4 h-4 absolute left-4 text-zinc-400" />
+                      <input
+                        type="time"
+                        value={returnTimeStr}
+                        onChange={(e) => setReturnTimeStr(e.target.value)}
+                        className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl pl-11 pr-5 py-4 text-xs font-extrabold text-black dark:text-white focus:outline-none focus:border-yellow-400 transition-all shadow-inner"
+                      />
+                    </div>
+
+                    <div className="flex items-center space-x-2 pt-1">
+                      <span className="text-[10px] font-bold text-zinc-400">Quick add:</span>
+                      {[15, 30, 60, 120].map((mins) => (
+                        <button
+                          key={mins}
+                          type="button"
+                          onClick={() => addTimeMinutes(mins)}
+                          className="px-2.5 py-1 rounded-full bg-zinc-200/80 dark:bg-zinc-800/80 border border-zinc-300/40 dark:border-zinc-700/60 text-[10px] font-bold text-zinc-700 dark:text-zinc-300 hover:border-yellow-400 active:scale-90 transition-all"
+                        >
+                          +{mins >= 60 ? `${mins / 60}h` : `${mins}m`}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
+                {/* STEP 3: CHECK-IN & ALERT TIMERS */}
                 <div className="w-full shrink-0 space-y-5 px-1">
                   <div className="space-y-1">
                     <h2 className="text-lg font-black text-black dark:text-white flex items-center gap-2">
                       <span>Safety Timers & Alerts</span>
                       <Radio className="w-5 h-5 text-yellow-400" />
                     </h2>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      Configure check-in prompt intervals and guardian escalation grace period.
+                    </p>
                   </div>
 
                   <div className="space-y-4 pt-1">
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-extrabold text-black dark:text-white">Self Check-In Frequency (Minutes)</label>
+                      <label className="block text-xs font-extrabold text-black dark:text-white">
+                        Self Check-In Frequency (Minutes)
+                      </label>
                       <input
                         type="number"
                         min="1"
                         max="1440"
                         value={userReminderMins}
                         onChange={(event) => setUserReminderMins(event.target.value ? Number(event.target.value) : "")}
-                        className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl px-4 py-3.5 text-xs font-semibold text-black dark:text-white"
+                        className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl px-4 py-3.5 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400"
                       />
+                      <p className="text-[10px] text-zinc-500">How often your phone asks &quot;Confirm I&apos;m safe&quot;.</p>
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="block text-xs font-extrabold text-black dark:text-white">Guardian Escalation Grace Period (Minutes)</label>
+                      <label className="block text-xs font-extrabold text-black dark:text-white">
+                        Guardian Escalation Grace Period (Minutes)
+                      </label>
                       <input
                         type="number"
                         min="1"
                         max="1440"
                         value={contactReminderMins}
                         onChange={(event) => setContactReminderMins(event.target.value ? Number(event.target.value) : "")}
-                        className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl px-4 py-3.5 text-xs font-semibold text-black dark:text-white"
+                        className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl px-4 py-3.5 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400"
                       />
+                      <p className="text-[10px] text-zinc-500">Grace period after missed return time before guardians are alerted.</p>
                     </div>
                   </div>
                 </div>
 
+                {/* STEP 4: GUARDIANS, SELFIE & NOTES */}
                 <div className="w-full shrink-0 space-y-5 px-1">
                   <div className="space-y-1">
                     <h2 className="text-lg font-black text-black dark:text-white flex items-center gap-2">
                       <span>Choose Guardians</span>
                       <Shield className="w-5 h-5 text-yellow-400" />
                     </h2>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      Select individual contacts or entire circle groups to monitor your journey.
+                    </p>
                   </div>
+
+                  {tier === "free" && (
+                    <div className="bg-yellow-400/10 border border-yellow-400/30 rounded-2xl p-3 flex items-center justify-between gap-2">
+                      <div className="flex items-center space-x-2 min-w-0">
+                        <Zap className="w-4 h-4 text-yellow-500 fill-yellow-500 shrink-0" />
+                        <span className="text-[11px] font-bold text-black dark:text-white truncate">
+                          Free plan: Up to 3 contacts
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onNavigate("profile")}
+                        className="text-[10px] font-black bg-yellow-400 text-black px-2.5 py-1 rounded-full shrink-0 active:scale-95 transition-all"
+                      >
+                        Upgrade Pro
+                      </button>
+                    </div>
+                  )}
 
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <label className="block text-xs font-extrabold text-black dark:text-white">Recipients</label>
-                      <span className="text-[10px] font-bold text-zinc-400">{selectedContactIds.length} Selected</span>
+                      <label className="block text-xs font-extrabold text-black dark:text-white">
+                        Recipients
+                      </label>
+                      <span className="text-[10px] font-bold text-zinc-400">
+                        {selectedContactIds.length} Selected
+                      </span>
                     </div>
 
-                    <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
-                      {contacts.map((c) => {
-                        const isSelected = selectedContactIds.includes(c.id);
-                        return (
-                          <button
-                            key={c.id}
-                            type="button"
-                            onClick={() => toggleContactSelection(c.id)}
-                            className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-2xl text-xs font-extrabold transition-all border shrink-0 ${
-                              isSelected
-                                ? "bg-black dark:bg-white text-white dark:text-black border-black dark:border-white"
-                                : "bg-zinc-200/60 dark:bg-zinc-900/80 text-zinc-500 border-zinc-300/50 dark:border-zinc-800"
-                            }`}
-                          >
-                            <span>{c.name}</span>
-                          </button>
-                        );
-                      })}
+                    <div className="grid grid-cols-2 gap-1 rounded-full bg-zinc-200/70 dark:bg-zinc-900 p-1">
+                      <button
+                        type="button"
+                        onClick={() => setContactSelectionMode("individual")}
+                        className={`rounded-full py-1.5 text-[10px] font-extrabold transition-colors ${contactSelectionMode === "individual" ? "bg-yellow-400 text-black" : "text-zinc-500 dark:text-zinc-400"}`}
+                      >
+                        Individual
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setContactSelectionMode("groups")}
+                        className={`rounded-full py-1.5 text-[10px] font-extrabold transition-colors ${contactSelectionMode === "groups" ? "bg-yellow-400 text-black" : "text-zinc-500 dark:text-zinc-400"}`}
+                      >
+                        Circle Groups
+                      </button>
                     </div>
+
+                    {contacts.length === 0 ? (
+                      <div className="p-3 bg-zinc-200/60 dark:bg-zinc-900/60 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl text-[11px] font-bold text-zinc-600 dark:text-zinc-400 flex items-center justify-between">
+                        <span>⚠️ No contacts added yet.</span>
+                        <button
+                          type="button"
+                          onClick={() => onNavigate("contacts")}
+                          className="underline font-black text-black dark:text-white"
+                        >
+                          Add Circle
+                        </button>
+                      </div>
+                    ) : contactSelectionMode === "groups" ? (
+                      <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
+                        {contactGroups.map((group) => {
+                          const groupContacts = contacts.filter((c) => c.group_category === group);
+                          const isSelected = groupContacts.length > 0 && groupContacts.every((c) => selectedContactIds.includes(c.id));
+                          return (
+                            <button
+                              key={group}
+                              type="button"
+                              onClick={() => {
+                                groupContacts.forEach((c) => {
+                                  const sel = selectedContactIds.includes(c.id);
+                                  if (isSelected ? sel : !sel) toggleContactSelection(c.id);
+                                });
+                              }}
+                              className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-2xl text-xs font-extrabold transition-all border shrink-0 ${
+                                isSelected
+                                  ? "bg-black dark:bg-white text-white dark:text-black border-black dark:border-white shadow-sm"
+                                  : "bg-zinc-200/60 dark:bg-zinc-900/80 text-zinc-500 border-zinc-300/50 dark:border-zinc-800"
+                              }`}
+                            >
+                              <div className={`w-4 h-4 rounded-full flex items-center justify-center ${isSelected ? "bg-yellow-400 text-black" : "bg-zinc-300 dark:bg-zinc-800 text-transparent"}`}>
+                                <Check className="w-2.5 h-2.5 stroke-3" />
+                              </div>
+                              <span>{group}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
+                        {contacts.map((c) => {
+                          const isSelected = selectedContactIds.includes(c.id);
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => toggleContactSelection(c.id)}
+                              className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-2xl text-xs font-extrabold transition-all border shrink-0 ${
+                                isSelected
+                                  ? "bg-black dark:bg-white text-white dark:text-black border-black dark:border-white shadow-sm"
+                                  : "bg-zinc-200/60 dark:bg-zinc-900/80 text-zinc-500 border-zinc-300/50 dark:border-zinc-800"
+                              }`}
+                            >
+                              <div className={`w-4 h-4 rounded-full flex items-center justify-center ${isSelected ? "bg-yellow-400 text-black" : "bg-zinc-300 dark:bg-zinc-800 text-transparent"}`}>
+                                <Check className="w-2.5 h-2.5 stroke-3" />
+                              </div>
+                              <span>{c.name}</span>
+                              {c.isLociUser && (
+                                <span className="bg-yellow-400 text-black text-[9px] px-1.5 py-0.2 rounded-full font-black uppercase">
+                                  Déloci
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
+                  {/* Selfie / Proof & Notes */}
                   <div className="space-y-2.5">
-                    <label className="block text-xs font-extrabold text-black dark:text-white">Selfie / Proof & Notes (Optional)</label>
+                    <label className="block text-xs font-extrabold text-black dark:text-white">
+                      Selfie / Proof & Notes (Optional)
+                    </label>
+
                     {attachedMedia ? (
-                      <div className="relative rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-700/60 h-36 flex items-center justify-center">
-                        <img src={attachedMedia.previewUrl} alt="Selfie preview" className="w-full h-full object-cover" />
-                        <button type="button" onClick={removeMedia} className="absolute top-2 right-2 p-1.5 rounded-full bg-black/80 text-white">
+                      <div className="relative rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-700/60 h-36 flex items-center justify-center shadow-lg">
+                        {attachedMedia.type === "image" ? (
+                          <img src={attachedMedia.previewUrl} alt="Selfie preview" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="relative w-full h-full bg-black flex items-center justify-center">
+                            <video src={attachedMedia.previewUrl} className="w-full h-full object-cover" />
+                            <Play className="w-8 h-8 text-white absolute fill-white opacity-80" />
+                          </div>
+                        )}
+                        <div className="absolute bottom-2 left-2 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-full text-[10px] text-white font-medium">
+                          Attached ✓
+                        </div>
+                        <button
+                          type="button"
+                          onClick={removeMedia}
+                          className="absolute top-2 right-2 p-1.5 rounded-full bg-black/80 text-white backdrop-blur-md hover:bg-red-600 transition-colors"
+                        >
                           <X className="w-4 h-4" />
                         </button>
                       </div>
                     ) : (
                       <div className="grid grid-cols-2 gap-2">
-                        <button type="button" onClick={startCamera} className="py-3 px-3 rounded-2xl bg-zinc-100 dark:bg-zinc-800/80 text-xs font-bold">Take Selfie</button>
-                        <button type="button" onClick={() => galleryInputRef.current?.click()} className="py-3 px-3 rounded-2xl bg-zinc-100 dark:bg-zinc-800/80 text-xs font-bold">Upload File</button>
+                        <button
+                          type="button"
+                          onClick={startCamera}
+                          className="flex items-center justify-center space-x-2 py-3 px-3 rounded-2xl bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-300 dark:border-zinc-700 text-xs font-bold text-black dark:text-white hover:border-yellow-400 transition-all"
+                        >
+                          <Camera className="w-4 h-4 text-zinc-400" />
+                          <span>Take Selfie</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => galleryInputRef.current?.click()}
+                          className="flex items-center justify-center space-x-2 py-3 px-3 rounded-2xl bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-300 dark:border-zinc-700 text-xs font-bold text-black dark:text-white hover:border-yellow-400 transition-all"
+                        >
+                          <Paperclip className="w-4 h-4 text-zinc-400" />
+                          <span>Upload File</span>
+                        </button>
                       </div>
                     )}
+
+                    <input
+                      type="text"
+                      placeholder="e.g. Uber, License Plate GW-4920-22"
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      className="w-full bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 rounded-2xl px-4 py-3 text-xs font-semibold text-black dark:text-white focus:outline-none focus:border-yellow-400"
+                    />
                   </div>
                 </div>
               </div>
             </div>
 
+            {/* Wizard Action Bar */}
             <div className="pt-4 pb-4 flex items-center gap-3">
               {currentStep > 1 && (
                 <button
                   type="button"
                   onClick={() => setCurrentStep((s) => s - 1)}
-                  className="px-5 py-4 rounded-full bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white text-xs font-black"
+                  className="px-5 py-4 rounded-full bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white text-xs font-black active:scale-95 transition-all"
                 >
                   Back
                 </button>
@@ -1273,7 +1712,7 @@ export function SessionPage({
                 <button
                   type="button"
                   onClick={handleNextStep}
-                  className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-4 rounded-full text-xs flex items-center justify-center space-x-2"
+                  className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-4 rounded-full text-xs transition-all flex items-center justify-center space-x-2 active:scale-95 shadow-lg shadow-yellow-400/20"
                 >
                   <span>Next Step</span>
                   <ArrowRight className="w-4 h-4 stroke-3" />
@@ -1283,9 +1722,16 @@ export function SessionPage({
                   type="button"
                   onClick={(e) => void executeStartSession(e)}
                   disabled={sessionLoading}
-                  className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-4 rounded-full text-xs flex items-center justify-center space-x-2 disabled:opacity-40"
+                  className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-black font-extrabold py-4 rounded-full text-xs transition-all flex items-center justify-center space-x-2 active:scale-95 disabled:opacity-40 shadow-lg shadow-yellow-400/20"
                 >
-                  {sessionLoading ? <Loader2 className="w-5 h-5 animate-spin text-black" /> : <span>Start Session</span>}
+                  {sessionLoading ? (
+                    <Loader2 className="w-5 h-5 animate-spin text-black" />
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 text-black fill-black" />
+                      <span>Start Session</span>
+                    </>
+                  )}
                 </button>
               )}
             </div>

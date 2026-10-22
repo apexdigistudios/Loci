@@ -65,7 +65,7 @@ function getSessionCoordinates(session: SharedSession) {
   };
   const geoJsonCoordinates = Array.isArray(location.coordinates) ? location.coordinates : [];
   
-  // Prioritize metadata coordinates pushed live during SOS or regular updates
+  // Strictly extract sender coordinates from metadata or current session columns
   const latitude = readCoordinate(metadata.latitude, row.current_lat, row.latitude, row.lat, row.location_latitude, row.last_latitude, location.latitude, location.lat, geoJsonCoordinates[1]);
   const longitude = readCoordinate(metadata.longitude, row.current_lng, row.longitude, row.lng, row.location_longitude, row.last_longitude, location.longitude, location.lng, geoJsonCoordinates[0]);
 
@@ -129,6 +129,7 @@ export function SharedSessionsPage({
     return () => window.clearInterval(timer);
   }, []);
 
+  // Fetch current user profile (avatar & nickname) for the receiver marker
   useEffect(() => {
     if (!currentUserId && !userPhone) return;
     async function fetchMyProfile() {
@@ -149,6 +150,7 @@ export function SharedSessionsPage({
     void fetchMyProfile();
   }, [currentUserId, userPhone]);
 
+  // Continuously watch receiver's live geolocation as they move
   useEffect(() => {
     if (typeof navigator === "undefined" || !navigator.geolocation) return;
     const watchId = navigator.geolocation.watchPosition(
@@ -257,6 +259,7 @@ export function SharedSessionsPage({
     }
   }, [currentUserId, userPhone]);
 
+  // Real-time Supabase subscription to instantly pick up sender's location updates
   useEffect(() => {
     const loadTimer = window.setTimeout(() => void fetchSharedSessions(), 0);
 
@@ -568,7 +571,7 @@ export function SharedSessionsPage({
               <MessageSquare className="w-3 h-3 text-yellow-500 shrink-0" />
               <span>SOS Emergency Note</span>
             </p>
-            <p className="text-zinc-700 dark:text-zinc-200 font-medium text-[11px] break-words">{activeDetailSession.notes}</p>
+            <p className="text-zinc-700 dark:text-zinc-200 font-medium text-[11px] wrap-break-word">{activeDetailSession.notes}</p>
           </div>
         )}
 
