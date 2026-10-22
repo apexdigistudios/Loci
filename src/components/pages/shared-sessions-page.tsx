@@ -269,36 +269,50 @@ export function SharedSessionsPage({
 
           if (payload.eventType === "UPDATE" && payload.new) {
             const updated = payload.new as SharedSession;
-            setSharedSessions((prev) =>
-              prev.map((s) =>
-                s.id === updated.id
-                  ? {
-                      ...s,
-                      ...updated,
-                      metadata: updated.metadata ? { ...(s.metadata || {}), ...(updated.metadata as Record<string, unknown>) } : s.metadata,
-                      user: updated.user || s.user,
-                    }
-                  : s
-              )
-            );
-            setHistorySessions((prev) =>
-              prev.map((s) =>
-                s.id === updated.id
-                  ? {
-                      ...s,
-                      ...updated,
-                      metadata: updated.metadata ? { ...(s.metadata || {}), ...(updated.metadata as Record<string, unknown>) } : s.metadata,
-                      user: updated.user || s.user,
-                    }
-                  : s
-              )
-            );
+            const activeStatuses = ["active", "escalated", "missed"];
+            const historyStatuses = ["completed", "expired"];
+            const isActive = activeStatuses.includes(updated.status);
+            const isHistory = historyStatuses.includes(updated.status);
+
+            setSharedSessions((prev) => {
+              const existing = prev.find((session) => session.id === updated.id);
+              const merged = {
+                ...existing,
+                ...updated,
+                metadata: updated.metadata
+                  ? { ...(existing?.metadata || {}), ...(updated.metadata as Record<string, unknown>) }
+                  : existing?.metadata,
+                user: updated.user || existing?.user,
+              } as SharedSession;
+              const withoutUpdated = prev.filter((session) => session.id !== updated.id);
+              return isActive ? [merged, ...withoutUpdated] : withoutUpdated;
+            });
+            setHistorySessions((prev) => {
+              const existing = prev.find((session) => session.id === updated.id);
+              const merged = {
+                ...existing,
+                ...updated,
+                metadata: updated.metadata
+                  ? { ...(existing?.metadata || {}), ...(updated.metadata as Record<string, unknown>) }
+                  : existing?.metadata,
+                user: updated.user || existing?.user,
+              } as SharedSession;
+              const withoutUpdated = prev.filter((session) => session.id !== updated.id);
+              return isHistory ? [merged, ...withoutUpdated] : withoutUpdated;
+            });
           } else {
             void fetchSharedSessions();
           }
         }
       )
-      .subscribe();
+      .subscribe((status, error) => {
+        if (process.env.NODE_ENV === "development") {
+          console.log("[checkin_sessions realtime] channel status:", status, error || "");
+        }
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.error("checkin_sessions realtime connection failed:", status, error);
+        }
+      });
 
     return () => {
       window.clearTimeout(loadTimer);

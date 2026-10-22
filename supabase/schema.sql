@@ -30,6 +30,7 @@ create table if not exists public.checkin_sessions (
   status text not null default 'active'
     check (status in ('active', 'completed', 'missed', 'escalated')),
   notes text,
+  metadata jsonb not null default '{}'::jsonb,
   media_url text,
   current_lat double precision,
   current_lng double precision,
@@ -46,6 +47,7 @@ create table if not exists public.checkin_sessions (
 
 alter table public.checkin_sessions
   add column if not exists user_id uuid references public.users(id) on delete cascade,
+  add column if not exists metadata jsonb not null default '{}'::jsonb,
   add column if not exists user_reminder_mins integer not null default 15,
   add column if not exists contact_reminder_mins integer not null default 30,
   add column if not exists last_user_checkin_at timestamptz not null default now(),

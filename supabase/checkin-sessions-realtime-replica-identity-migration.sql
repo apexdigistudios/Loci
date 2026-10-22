@@ -1,4 +1,7 @@
 -- Include complete before/after rows in check-in session Realtime events.
+alter table public.checkin_sessions
+  add column if not exists metadata jsonb not null default '{}'::jsonb;
+
 alter table public.checkin_sessions replica identity full;
 
 do $$

@@ -173,6 +173,36 @@ export function SessionPage({
   const locationWatchIdRef = useRef<number | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
+  const persistSessionLocation = useCallback(async (
+    sessionId: string,
+    coordinates: SessionCoordinates,
+    address: string,
+    isSos: boolean
+  ) => {
+    const { data, error } = await supabase
+      .from("checkin_sessions")
+      .update({
+        current_lat: coordinates.latitude,
+        current_lng: coordinates.longitude,
+        metadata: {
+          latitude: coordinates.latitude,
+          longitude: coordinates.longitude,
+          address,
+          updated_at: new Date().toISOString(),
+          is_sos: isSos,
+        },
+      })
+      .eq("id", sessionId)
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      console.error("Failed to publish live session location:", error);
+    } else if (!data) {
+      console.error("Live session location was not saved; the session row was not visible to the sender.");
+    }
+  }, []);
+
   useEffect(() => {
     if (!userId) return;
     void supabase
@@ -296,26 +326,18 @@ export function SessionPage({
         setLocationStatus(coords.accuracy > 500 ? "low-accuracy" : "granted");
 
         if (activeSession && !activeSession.id.startsWith("local-")) {
-          void supabase
-            .from("checkin_sessions")
-            .update({
-              current_lat: latitude,
-              current_lng: longitude,
-              metadata: {
-                latitude,
-                longitude,
-                address: locationAddress,
-                updated_at: new Date().toISOString(),
-                is_sos: activeSession.status === "escalated",
-              },
-            })
-            .eq("id", activeSession.id);
+          void persistSessionLocation(
+            activeSession.id,
+            { latitude, longitude },
+            locationAddress,
+            activeSession.status === "escalated"
+          );
         }
       },
       () => setLocationStatus("denied"),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 }
     );
-  }, [activeSession, locationAddress]);
+  }, [activeSession, locationAddress, persistSessionLocation]);
 
   useEffect(() => {
     if (!activeSession) return;
@@ -328,27 +350,19 @@ export function SessionPage({
           setLocationCoords({ latitude, longitude });
 
           if (!activeSession.id.startsWith("local-")) {
-            await supabase
-              .from("checkin_sessions")
-              .update({
-                current_lat: latitude,
-                current_lng: longitude,
-                metadata: {
-                  latitude,
-                  longitude,
-                  address: locationAddress,
-                  updated_at: new Date().toISOString(),
-                  is_sos: activeSession.status === "escalated",
-                },
-              })
-              .eq("id", activeSession.id);
+            await persistSessionLocation(
+              activeSession.id,
+              { latitude, longitude },
+              locationAddress,
+              activeSession.status === "escalated"
+            );
           }
         }, (err) => console.error("Continuous location broadcast error:", err), { enableHighAccuracy: true });
       }
     }, 4000);
 
     return () => clearInterval(sosInterval);
-  }, [activeSession, locationAddress]);
+  }, [activeSession, locationAddress, persistSessionLocation]);
 
   useEffect(() => {
     requestCurrentLocation();
@@ -377,20 +391,12 @@ export function SessionPage({
     }
 
     if (activeSession && !activeSession.id.startsWith("local-")) {
-      void supabase
-        .from("checkin_sessions")
-        .update({
-          current_lat: coordinates.latitude,
-          current_lng: coordinates.longitude,
-          metadata: {
-            latitude: coordinates.latitude,
-            longitude: coordinates.longitude,
-            address: locationAddress,
-            updated_at: new Date().toISOString(),
-            is_sos: activeSession.status === "escalated",
-          },
-        })
-        .eq("id", activeSession.id);
+      void persistSessionLocation(
+        activeSession.id,
+        coordinates,
+        locationAddress,
+        activeSession.status === "escalated"
+      );
     }
   };
 
