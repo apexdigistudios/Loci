@@ -57,6 +57,7 @@ interface SessionCoordinates {
 interface SessionPageProps {
   sessionHeadingSrc: string;
   userId: string | null;
+  userPhone?: string;
   activeSession: ActiveSession | null;
   destination: string;
   setDestination: (v: string) => void;
@@ -87,6 +88,7 @@ interface SuggestionItem {
 export function SessionPage({
   sessionHeadingSrc,
   userId,
+  userPhone,
   activeSession,
   destination,
   setDestination,
@@ -311,7 +313,6 @@ export function SessionPage({
     );
   }, [activeSession]);
 
-  // Location on map auto-refreshes every 5 mins
   useEffect(() => {
     requestCurrentLocation();
     const refreshInterval = setInterval(() => {
@@ -394,7 +395,6 @@ export function SessionPage({
     return options;
   }, []);
 
-  // Free users active session lasts for just 1 day max. More than 1 day requires upgrade.
   useEffect(() => {
     const frameId = window.requestAnimationFrame(() => {
       if (activeSession?.expected_arrival_at) {
@@ -439,7 +439,6 @@ export function SessionPage({
     activeSession.last_user_checkin_at || activeSession.expected_arrival_at
   ).getTime() >= (activeSession.user_reminder_mins || 15) * 60000;
 
-  // Check-in alerts and safety notices also go to notification page
   useEffect(() => {
     if (!activeSession || activeSession.status !== "active") return;
 
@@ -594,7 +593,7 @@ export function SessionPage({
     }
   };
 
-  // Emergency SOS feature sending coordinates and location address
+  // Emergency SOS feature sending coordinates and location address & storing in Supabase
   const handleTriggerSos = async () => {
     if (sosSending) return;
     const sosCountKey = `deloci_sos_uses_${userId || "guest"}`;
@@ -610,18 +609,73 @@ export function SessionPage({
     try {
       localStorage.setItem(sosCountKey, String(usedSos + 1));
       
-      const sosMessage = `🚨 URGENT: Emergency SOS triggered! Current Location: ${locationAddress || "Unknown Address"} (${locationCoords ? `${locationCoords.latitude.toFixed(5)},${locationCoords.longitude.toFixed(5)}` : "No GPS"})`;
+      const sosMessage = `🚨 URGENT: Emergency SOS triggered! Current Location: ${locationAddress || "Unknown Address"} (${locationCoords ? `${locationCoords.latitude.toFixed(5)}, ${locationCoords.longitude.toFixed(5)}` : "No GPS"})`;
+
+      let targetSessionId = activeSession?.id;
+
+      if (userId) {
+        const sosMetadata = {
+          latitude: locationCoords?.latitude,
+          longitude: locationCoords?.longitude,
+          address: locationAddress,
+          type: "emergency",
+          is_sos: true,
+        };
+
+        if (targetSessionId && !targetSessionId.startsWith("local-")) {
+          await supabase
+            .from("checkin_sessions")
+            .update({
+              status: "escalated",
+              notes: sosMessage,
+              metadata: sosMetadata,
+              current_lat: locationCoords?.latitude,
+              current_lng: locationCoords?.longitude,
+            })
+            .eq("id", targetSessionId);
+        } else {
+          const expectedArrival = new Date(Date.now() + 24 * 3600000).toISOString();
+          const { data: newSession, error: sessErr } = await supabase
+            .from("checkin_sessions")
+            .insert({
+              user_id: userId,
+              user_phone: userPhone || "",
+              destination: "🚨 EMERGENCY SOS",
+              expected_arrival_at: expectedArrival,
+              status: "escalated",
+              notes: sosMessage,
+              metadata: sosMetadata,
+              current_lat: locationCoords?.latitude,
+              current_lng: locationCoords?.longitude,
+            })
+            .select("id")
+            .single();
+
+          if (!sessErr && newSession) {
+            targetSessionId = newSession.id;
+            if (sharedContacts.length > 0) {
+              const recipientRows = sharedContacts.map(c => ({
+                session_id: newSession.id,
+                recipient_phone: c.phone,
+                contact_phone: c.phone,
+              }));
+              await supabase.from("session_recipients").insert(recipientRows);
+            }
+          }
+        }
+      }
 
       void dispatchAlert({
         userIds: userId || "",
         title: "🚨 EMERGENCY SOS BROADCASTED",
         message: sosMessage,
         type: "emergency",
-        sessionId: activeSession?.id,
+        sessionId: targetSessionId,
         metadata: {
           latitude: locationCoords?.latitude,
           longitude: locationCoords?.longitude,
           address: locationAddress,
+          is_sos: true,
         },
       });
 
@@ -632,11 +686,12 @@ export function SessionPage({
           message: sosMessage,
           type: "emergency",
           url: "/main?tab=contacts",
-          sessionId: activeSession?.id,
+          sessionId: targetSessionId,
           metadata: {
             latitude: locationCoords?.latitude,
             longitude: locationCoords?.longitude,
             address: locationAddress,
+            is_sos: true,
           },
         });
       }
@@ -959,7 +1014,7 @@ export function SessionPage({
               </button>
             </div>
 
-            {/* Recipient Details: Name and group category only */}
+            {/* Recipient Details */}
             <div className="flex items-center space-x-3 px-3 py-3 rounded-2xl bg-zinc-100/80 dark:bg-zinc-900/80 border border-zinc-200/60 dark:border-zinc-800">
               {sharedContacts.length === 0 ? (
                 <div className="w-12 h-12 rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center shrink-0">
@@ -1356,7 +1411,7 @@ export function SessionPage({
                   </div>
                 </div>
 
-                {/* STEP 3: CHECK-IN & ALERT TIMERS (Free for all users) */}
+                {/* STEP 3: CHECK-IN & ALERT TIMERS */}
                 <div className="w-full shrink-0 space-y-5 px-1">
                   <div className="space-y-1">
                     <h2 className="text-lg font-black text-black dark:text-white flex items-center gap-2">

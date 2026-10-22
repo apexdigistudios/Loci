@@ -91,13 +91,6 @@ function formatSessionDuration(startedAt: string, expectedArrivalAt: string) {
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
-function formatCountdown(totalSeconds: number) {
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
-}
-
 function getSessionParticipantNames(session: SharedSession, contacts: Contact[], userPhone: string, ownerName: string) {
   const row = session as Record<string, unknown>;
   const storedParticipants = row.participants ?? row.shared_with ?? row.guardian_phones;
@@ -249,8 +242,9 @@ export function SharedSessionsPage({
 
       const allSessions = sessionsData || [];
 
-      const activeRows = allSessions.filter((s) => s.status === "active");
-      const historyRows = allSessions.filter((s) => s.status !== "active");
+      // Include active, escalated (SOS), and missed in active shared feeds
+      const activeRows = allSessions.filter((s) => s.status === "active" || s.status === "escalated" || s.status === "missed");
+      const historyRows = allSessions.filter((s) => s.status === "completed" || s.status === "expired");
 
       const senderPhones = Array.from(
         new Set(allSessions.map((session) => session.user_phone as string).filter(Boolean))
@@ -348,47 +342,6 @@ export function SharedSessionsPage({
     );
   };
 
-  const confirmSafe = async (session: SharedSession) => {
-    const checkedInAt = new Date().toISOString();
-    const { error } = await supabase
-      .from("checkin_sessions")
-      .update({ last_user_checkin_at: checkedInAt })
-      .eq("id", session.id)
-      .eq("status", "active");
-    if (error) {
-      console.error("Failed to record safety check-in:", error);
-      return;
-    }
-    setActiveDetailSession({ ...session, last_user_checkin_at: checkedInAt });
-  };
-
-  const extendSession = async (session: SharedSession) => {
-    const newArrival = new Date(Math.max(Date.now(), new Date(session.expected_arrival_at).getTime()) + 15 * 60000).toISOString();
-    const { error } = await supabase
-      .from("checkin_sessions")
-      .update({ expected_arrival_at: newArrival })
-      .eq("id", session.id)
-      .eq("status", "active");
-    if (error) {
-      console.error("Failed to extend safety session:", error);
-      return;
-    }
-    setActiveDetailSession({ ...session, expected_arrival_at: newArrival });
-  };
-
-  const endSession = async (session: SharedSession) => {
-    const { error } = await supabase
-      .from("checkin_sessions")
-      .update({ status: "completed" })
-      .eq("id", session.id)
-      .eq("status", "active");
-    if (error) {
-      console.error("Failed to end safety session:", error);
-      return;
-    }
-    setActiveDetailSession({ ...session, status: "completed" });
-  };
-
   const shareEmergencyDetails = async (session: SharedSession, ownerName: string) => {
     const details = `${ownerName} safety session. Destination: ${session.destination}. Expected arrival: ${new Date(session.expected_arrival_at).toLocaleString()}. Phone: ${session.user_phone}.`;
     try {
@@ -412,11 +365,12 @@ export function SharedSessionsPage({
   if (activeDetailSession) {
     const isSender = isSessionSender(activeDetailSession);
     const ownerName = getSenderDisplayName(activeDetailSession);
-    const isActive = activeDetailSession.status === "active";
+    const isActive = activeDetailSession.status === "active" || activeDetailSession.status === "escalated" || activeDetailSession.status === "missed";
     
     // Robust SOS emergency detection check
     const sessionMetadata = activeDetailSession.metadata && typeof activeDetailSession.metadata === "object" ? activeDetailSession.metadata as Record<string, unknown> : {};
     const isSosEmergency = 
+      activeDetailSession.status === "escalated" ||
       activeDetailSession.notes?.toLowerCase().includes("sos") || 
       activeDetailSession.destination?.toLowerCase().includes("sos") ||
       activeDetailSession.notes?.toLowerCase().includes("emergency") ||
@@ -435,14 +389,13 @@ export function SharedSessionsPage({
     );
 
     const getStatusLabel = () => {
+      if (isSosEmergency) return "🚨 SOS EMERGENCY";
       if (isActive) return isOverdue ? "OVERDUE" : "ACTIVE";
       if (activeDetailSession.status === "completed") return "COMPLETED";
-      if (activeDetailSession.status === "expired" || activeDetailSession.status === "missed") return "EXPIRED";
       return activeDetailSession.status.toUpperCase();
     };
 
     const statusLabel = getStatusLabel();
-    const countdownSeconds = detailNow > 0 ? Math.max(0, Math.floor((expectedArrivalMs - detailNow) / 1000)) : 0;
     const activeGuardians = contacts.filter((contact) => guardianPhones.includes(contact.phone));
 
     return (
@@ -458,11 +411,11 @@ export function SharedSessionsPage({
           </button>
 
           <span className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-            statusLabel === "ACTIVE"
+            isSosEmergency
+              ? "bg-red-600 text-white font-black animate-pulse shadow-md"
+              : statusLabel === "ACTIVE"
               ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
-              : statusLabel === "COMPLETED"
-              ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700"
-              : "bg-red-500/10 text-red-500 border border-red-500/20"
+              : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700"
           }`}>
             {isActive && <Radio className="w-3 h-3 animate-pulse text-emerald-500" />}
             <span>{statusLabel}</span>
@@ -493,10 +446,10 @@ export function SharedSessionsPage({
           </div>
         </div>
 
-        {/* Destination Info */}
+        {/* Destination / Alert Info */}
         <div className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 rounded-2xl p-3.5 space-y-2.5 shadow-xs">
           <div>
-            <p className="text-[9px] font-bold uppercase text-zinc-400 tracking-wider">Destination</p>
+            <p className="text-[9px] font-bold uppercase text-zinc-400 tracking-wider">Destination / Alert</p>
             <h4 className="text-base font-bold text-black dark:text-white leading-tight mt-0.5">{activeDetailSession.destination}</h4>
           </div>
 
@@ -515,41 +468,6 @@ export function SharedSessionsPage({
             <Clock className="w-4 h-4 text-zinc-400" />
           </div>
         </div>
-
-        {/* Active Session Sender Timer Controls */}
-        {isActive && isSender && (
-          <section className="space-y-3 rounded-2xl border border-yellow-500/30 bg-yellow-500/5 p-4">
-            <div className="text-center">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Time Until Expected Arrival</p>
-              <p className="font-mono text-3xl font-bold text-yellow-500 mt-1" aria-live="polite">
-                {countdownSeconds > 0 ? formatCountdown(countdownSeconds) : "OVERDUE"}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => void confirmSafe(activeDetailSession)}
-              className="w-full rounded-xl bg-yellow-400 py-3 text-xs font-bold text-black active:scale-[0.98] transition-transform shadow-xs"
-            >
-              Confirm I’m Safe
-            </button>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => void extendSession(activeDetailSession)}
-                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-zinc-300 dark:border-zinc-700 py-2.5 text-xs font-bold text-black dark:text-white bg-white dark:bg-zinc-800"
-              >
-                <Plus className="h-3.5 w-3.5" /> Extend 15m
-              </button>
-              <button
-                type="button"
-                onClick={() => void endSession(activeDetailSession)}
-                className="rounded-xl bg-red-600 py-2.5 text-xs font-bold text-white"
-              >
-                End Session
-              </button>
-            </div>
-          </section>
-        )}
 
         {/* Map View & Location Details with Directions & Expansion */}
         <div ref={mapSectionRef} className="space-y-3 scroll-mt-4">
@@ -603,7 +521,7 @@ export function SharedSessionsPage({
                 </button>
               </div>
 
-              {/* Directions toggle for SOS / Received Sessions */}
+              {/* Directions toggle for SOS / Received Sessions (Plus tier unlocked) */}
               {isSosEmergency && !isSender && (
                 <div className="rounded-2xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-3 space-y-2">
                   <div className="flex items-center justify-between">
@@ -677,69 +595,12 @@ export function SharedSessionsPage({
           </div>
         )}
 
-        {/* Timestamps & Duration */}
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 rounded-xl p-2.5 space-y-0.5">
-            <p className="text-[9px] font-bold uppercase text-zinc-400">Started</p>
-            <p className="font-bold text-[11px] text-black dark:text-white">
-              {new Date(activeDetailSession.created_at).toLocaleString([], {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </p>
-          </div>
-
-          <div className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 rounded-xl p-2.5 space-y-0.5">
-            <p className="text-[9px] font-bold uppercase text-zinc-400">Planned Duration</p>
-            <p className="font-bold text-[11px] text-black dark:text-white">
-              {formatSessionDuration(activeDetailSession.created_at, activeDetailSession.expected_arrival_at)}
-            </p>
-          </div>
-        </div>
-
-        {/* Participants / Guardians */}
-        {isSender ? (
-          <section className="space-y-2 rounded-xl border border-zinc-200/70 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 p-3">
-            <h4 className="flex items-center gap-2 text-xs font-bold text-black dark:text-white">
-              <Users className="h-3.5 w-3.5 text-yellow-500" /> Guardians Assigned
-            </h4>
-            {activeGuardians.length > 0 ? (
-              <ul className="space-y-1.5">
-                {activeGuardians.map((guardian) => (
-                  <li key={guardian.id} className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-black dark:text-white">{guardian.name}</span>
-                    <span className="font-mono text-zinc-500 text-[11px]">{guardian.phone}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : guardianPhones.length > 0 ? (
-              <ul className="space-y-1.5">
-                {guardianPhones.map((phone) => <li key={phone} className="font-mono text-xs text-zinc-500">{phone}</li>)}
-              </ul>
-            ) : (
-              <p className="text-[11px] text-zinc-500">No specific contacts assigned.</p>
-            )}
-          </section>
-        ) : (
-          <div className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 p-2.5 rounded-xl text-xs space-y-1">
-            <p className="text-[9px] font-bold uppercase text-zinc-400 flex items-center space-x-1">
-              <Users className="w-3 h-3 text-yellow-500" />
-              <span>Shared Participants</span>
-            </p>
-            <p className="font-semibold text-[11px] text-black dark:text-white">
-              {getSessionParticipantNames(activeDetailSession, contacts, userPhone, ownerName).join(", ")}
-            </p>
-          </div>
-        )}
-
         {/* Notes */}
         {activeDetailSession.notes && (
           <div className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 p-2.5 rounded-xl text-xs space-y-1">
             <p className="text-[9px] font-bold uppercase text-zinc-400 flex items-center space-x-1">
               <MessageSquare className="w-3 h-3 text-yellow-500" />
-              <span>Note</span>
+              <span>SOS Emergency Note</span>
             </p>
             <p className="text-zinc-700 dark:text-zinc-200 font-medium text-[11px]">{activeDetailSession.notes}</p>
           </div>
@@ -798,13 +659,18 @@ export function SharedSessionsPage({
           {sharedSessions.map((s) => {
             const displayName = getSenderDisplayName(s);
             const timestamp = new Date(s.created_at);
+            const isSosItem = s.status === "escalated" || s.destination?.includes("SOS");
 
             return (
               <button
                 key={s.id}
                 type="button"
                 onClick={() => setActiveDetailSession(s)}
-                className="w-full bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 p-3 rounded-xl shadow-xs flex items-center justify-between gap-2.5 text-left cursor-pointer hover:border-yellow-500/50 active:scale-[0.99] transition-all group"
+                className={`w-full border p-3 rounded-xl shadow-xs flex items-center justify-between gap-2.5 text-left cursor-pointer transition-all group ${
+                  isSosItem
+                    ? "bg-red-500/10 dark:bg-red-950/30 border-red-500/40 hover:border-red-500"
+                    : "bg-white/80 dark:bg-zinc-900/80 border-zinc-200/50 dark:border-zinc-800/50 hover:border-yellow-500/50"
+                }`}
               >
                 <div className="flex items-center space-x-3 min-w-0">
                   <div className="relative shrink-0">
@@ -815,13 +681,19 @@ export function SharedSessionsPage({
                         displayName.slice(0, 2)
                       )}
                     </div>
-                    <span className="w-2 h-2 bg-emerald-500 border border-white dark:border-black rounded-full absolute -bottom-0.5 -right-0.5 animate-ping" />
+                    <span className={`w-2 h-2 rounded-full absolute -bottom-0.5 -right-0.5 animate-ping ${isSosItem ? "bg-red-500" : "bg-emerald-500"}`} />
                   </div>
 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center space-x-1.5">
                       <span className="text-xs font-bold text-black dark:text-white truncate">{displayName}</span>
-                      <span className="text-[8px] font-bold uppercase bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded-md shrink-0">LIVE</span>
+                      <span className={`text-[8px] font-bold uppercase px-1.5 py-0.2 rounded-md shrink-0 ${
+                        isSosItem
+                          ? "bg-red-600 text-white font-black animate-pulse"
+                          : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                      }`}>
+                        {isSosItem ? "🚨 SOS" : "LIVE"}
+                      </span>
                     </div>
                     <p className="text-[11px] text-zinc-600 dark:text-zinc-300 font-medium truncate mt-0.5">{s.destination}</p>
                     <p className="text-[9px] text-zinc-400 mt-0.5">
@@ -835,80 +707,6 @@ export function SharedSessionsPage({
           })}
         </div>
       )}
-
-      {/* Recents & History Section with Sent / Received Tab Switchers */}
-      <section className="space-y-2.5 pt-2">
-        <div className="flex items-center justify-between px-1">
-          <h3 className="text-xs font-bold text-black dark:text-white">Recents &amp; History</h3>
-          
-          {/* Tab Switcher */}
-          <div className="flex bg-zinc-100 dark:bg-zinc-800/80 p-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700/50">
-            <button
-              type="button"
-              onClick={() => setHistoryTab("sent")}
-              className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-all ${
-                historyTab === "sent"
-                  ? "bg-white dark:bg-zinc-900 text-black dark:text-white shadow-xs"
-                  : "text-zinc-500 hover:text-black dark:hover:text-white"
-              }`}
-            >
-              Sent ({sentHistory.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setHistoryTab("received")}
-              className={`px-2.5 py-1 text-[10px] font-bold rounded-md transition-all ${
-                historyTab === "received"
-                  ? "bg-white dark:bg-zinc-900 text-black dark:text-white shadow-xs"
-                  : "text-zinc-500 hover:text-black dark:hover:text-white"
-              }`}
-            >
-              Received ({receivedHistory.length})
-            </button>
-          </div>
-        </div>
-
-        {/* History Session List */}
-        {((historyTab === "sent" ? sentHistory : receivedHistory).length === 0) ? (
-          <p className="text-[10px] text-zinc-400 px-1 py-4 text-center">
-            {historyTab === "sent" ? "No sent session history." : "No received session history."}
-          </p>
-        ) : (
-          <div className="space-y-1.5">
-            {(historyTab === "sent" ? sentHistory : receivedHistory).map((session) => {
-              const displayName = getSenderDisplayName(session);
-              const isCompleted = session.status === "completed";
-
-              return (
-                <button
-                  key={session.id}
-                  type="button"
-                  onClick={() => setActiveDetailSession(session)}
-                  className="w-full bg-white/80 dark:bg-zinc-900/70 border border-zinc-200/50 dark:border-zinc-800/50 p-2.5 px-3 rounded-xl flex items-center justify-between text-left hover:border-yellow-500/50 transition-colors"
-                >
-                  <span className="min-w-0">
-                    <span className="flex items-center gap-1.5">
-                      <span className="text-[11px] font-bold text-black dark:text-white truncate">{displayName}</span>
-                      <span className={`text-[8px] font-bold uppercase px-1.5 py-0.2 rounded-md ${
-                        isCompleted
-                          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                          : "bg-zinc-100 dark:bg-zinc-800 text-zinc-500"
-                      }`}>
-                        {session.status}
-                      </span>
-                    </span>
-                    <span className="block text-[10px] text-zinc-500 dark:text-zinc-400 truncate mt-0.5">{session.destination}</span>
-                    <span className="block text-[9px] text-zinc-400 mt-0.5">
-                      {new Date(session.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                    </span>
-                  </span>
-                  <ChevronRight className="w-3.5 h-3.5 text-zinc-400 shrink-0 ml-2" />
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </section>
     </div>
   );
 }
