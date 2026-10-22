@@ -13,10 +13,10 @@ export function useSubscription(userId?: string | null, userPhone?: string | nul
 
     async function fetchSubscription() {
       setLoading(true);
+      console.log("🔍 [useSubscription] Checking tier for userId:", userId, "userPhone:", userPhone);
       try {
         let targetUserId = userId;
 
-        // 1. If no userId provided, try finding the user by phone
         if (!targetUserId && userPhone) {
           const { data: userData, error: userErr } = await supabase
             .from("users")
@@ -24,65 +24,64 @@ export function useSubscription(userId?: string | null, userPhone?: string | nul
             .eq("phone", cleanPhone(userPhone))
             .maybeSingle();
 
-          if (userErr) {
-            console.warn("useSubscription: Error fetching user by phone:", userErr.message);
-          }
-
+          console.log("🔍 [useSubscription] User lookup by phone result:", userData, "Error:", userErr);
           if (userData?.id) {
             targetUserId = userData.id;
           }
 
-          // Check if subscription tier is stored directly on the users record
-          const userDirectTier = (userData?.subscription_tier || userData?.tier || "").toLowerCase();
-          if (userDirectTier === "plus") {
-            if (!cancelled) {
-              setTier("plus");
-              setLoading(false);
-            }
+          const directTier = (userData?.subscription_tier || userData?.tier || "").toLowerCase();
+          if (directTier === "plus") {
+            console.log("✨ [useSubscription] Found Plus in users table directly.");
+            if (!cancelled) { setTier("plus"); setLoading(false); }
             return;
           }
         }
 
-        // 2. If we have a targetUserId, check the subscriptions table
-        if (targetUserId) {
-          const { data: subData, error: subErr } = await supabase
-            .from("subscriptions")
-            .select("tier, status")
-            .eq("user_id", targetUserId)
-            .maybeSingle();
+        if (!targetUserId) {
+          console.log("⚠️ [useSubscription] No userId found. Defaulting to free.");
+          if (!cancelled) { setTier("free"); setLoading(false); }
+          return;
+        }
 
-          if (subErr) {
-            console.warn("useSubscription: Error querying subscriptions table:", subErr.message);
-          }
+        // Query subscriptions table by user_id
+        const { data: subData, error: subErr } = await supabase
+          .from("subscriptions")
+          .select("*")
+          .eq("user_id", targetUserId);
 
-          if (subData && subData.status === "active" && subData.tier?.toLowerCase() === "plus") {
-            if (!cancelled) {
-              setTier("plus");
-              setLoading(false);
-            }
-            return;
-          }
+        console.log("🔍 [useSubscription] Subscriptions table query result:", subData, "Error:", subErr);
 
-          // 3. Fallback: check users table by targetUserId
-          const { data: userRecord } = await supabase
-            .from("users")
-            .select("subscription_tier, tier")
-            .eq("id", targetUserId)
-            .maybeSingle();
-
-          const recordTier = (userRecord?.subscription_tier || userRecord?.tier || "").toLowerCase();
-          if (recordTier === "plus") {
-            if (!cancelled) {
-              setTier("plus");
-              setLoading(false);
-            }
+        if (subData && subData.length > 0) {
+          const hasPlus = subData.some(
+            (row: any) =>
+              row.tier?.toLowerCase() === "plus" || row.status?.toLowerCase() === "active"
+          );
+          if (hasPlus) {
+            console.log("✨ [useSubscription] Plus tier confirmed via subscriptions table!");
+            if (!cancelled) { setTier("plus"); setLoading(false); }
             return;
           }
         }
 
+        // Fallback: check users table by targetUserId
+        const { data: userRec, error: userRecErr } = await supabase
+          .from("users")
+          .select("subscription_tier, tier")
+          .eq("id", targetUserId)
+          .maybeSingle();
+
+        console.log("🔍 [useSubscription] User record query result:", userRec, "Error:", userRecErr);
+        const userRecTier = (userRec?.subscription_tier || userRec?.tier || "").toLowerCase();
+        if (userRecTier === "plus") {
+          console.log("✨ [useSubscription] Plus tier confirmed via users table record!");
+          if (!cancelled) { setTier("plus"); setLoading(false); }
+          return;
+        }
+
+        console.log("🔒 [useSubscription] No Plus match found. Defaulting to free.");
         if (!cancelled) setTier("free");
-      } catch (error) {
-        console.error("useSubscription critical error:", error);
+      } catch (err) {
+        console.error("❌ [useSubscription] Exception caught:", err);
         if (!cancelled) setTier("free");
       } finally {
         if (!cancelled) setLoading(false);
