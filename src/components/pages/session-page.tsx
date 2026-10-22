@@ -114,7 +114,6 @@ export function SessionPage({
   const [actionMessage, setActionMessage] = useState("");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(undefined);
 
-  // Staged & Confirmed Media (WhatsApp style full-screen preview)
   const [stagedMedia, setStagedMedia] = useState<{
     file: File;
     previewUrl: string;
@@ -130,7 +129,6 @@ export function SessionPage({
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [isMapFullScreen, setIsMapFullScreen] = useState(false);
 
-  // SOS modal state
   const [showSosModal, setShowSosModal] = useState(false);
   const [sosSending, setSosSending] = useState(false);
 
@@ -205,7 +203,6 @@ export function SessionPage({
     [contacts]
   );
 
-  // Auto-detect country and fetch readable address name from user GPS coordinates
   useEffect(() => {
     if (!locationCoords) return;
     const fetchLocationDetails = async () => {
@@ -227,7 +224,6 @@ export function SessionPage({
     void fetchLocationDetails();
   }, [locationCoords]);
 
-  // Destination autocomplete with detected country restriction
   useEffect(() => {
     if (!destination || destination.trim().length < 2 || !showSuggestions) {
       const frameId = window.requestAnimationFrame(() => setSuggestions([]));
@@ -322,7 +318,6 @@ export function SessionPage({
     );
   }, [activeSession, locationAddress]);
 
-  // Continuously push live GPS coordinates, especially during active SOS/escalated state
   useEffect(() => {
     if (!activeSession) return;
 
@@ -660,7 +655,7 @@ export function SessionPage({
     try {
       localStorage.setItem(sosCountKey, String(usedSos + 1));
       
-      const sosMessage = `🚨 URGENT: Emergency SOS triggered! Current Location: ${locationAddress || "Unknown Address"} (${locationCoords ? `${locationCoords.latitude.toFixed(5)},${locationCoords.longitude.toFixed(5)}` : "No GPS"})`;
+      const sosMessage = `🚨 URGENT: Emergency SOS triggered! Current Location: ${locationAddress || "Unknown Address"} (${locationCoords ? `${locationCoords.latitude.toFixed(5)}, ${locationCoords.longitude.toFixed(5)}` : "No GPS"})`;
 
       let targetSessionId = activeSession?.id;
 
@@ -926,7 +921,6 @@ export function SessionPage({
         </div>
       )}
 
-      {/* WHATSAPP-STYLE FULL SCREEN MEDIA PREVIEW SHEET */}
       {stagedMedia && (
         <div className="fixed inset-0 z-99999 bg-black flex flex-col justify-between p-4 max-w-md mx-auto animate-in fade-in">
           <div className="flex items-center justify-between pt-[max(0.75rem,env(safe-area-inset-top))] z-10 px-2">
@@ -967,7 +961,6 @@ export function SessionPage({
         </div>
       )}
 
-      {/* CAMERA OVERLAY */}
       {isCameraActive && (
         <div className="fixed inset-0 z-100 bg-black flex flex-col justify-between p-4 max-w-md mx-auto">
           <div className="flex items-center justify-between pt-[max(0.75rem,env(safe-area-inset-top))] z-10 px-2">
@@ -1009,7 +1002,6 @@ export function SessionPage({
         </div>
       )}
 
-      {/* THEME-ADAPTIVE SOS CONFIRMATION MODAL */}
       {showSosModal && (
         <div className="fixed inset-0 z-99999 bg-black/60 dark:bg-black/70 backdrop-blur-md flex items-center justify-center p-4 transition-colors">
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 w-full max-w-xs space-y-4 text-center shadow-2xl">
@@ -1043,7 +1035,6 @@ export function SessionPage({
         </div>
       )}
 
-      {/* ACTIVE WATCH PAGEVIEW */}
       {activeSession ? (
         <div className="pt-2 space-y-6 min-h-[82vh] flex flex-col justify-between max-w-md mx-auto">
           <div className="space-y-6">
@@ -1066,7 +1057,6 @@ export function SessionPage({
               </button>
             </div>
 
-            {/* Recipient Details */}
             <div className="flex items-center space-x-3 px-3 py-3 rounded-2xl bg-zinc-100/80 dark:bg-zinc-900/80 border border-zinc-200/60 dark:border-zinc-800">
               {sharedContacts.length === 0 ? (
                 <div className="w-12 h-12 rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center shrink-0">
@@ -1199,7 +1189,6 @@ export function SessionPage({
             </div>
           </div>
 
-          {/* THEME-ADAPTIVE MOBILE-SIZED EXPANDED MAP MODAL */}
           {isMapFullScreen && locationCoords && (
             <div className="fixed inset-0 z-99999 bg-white/95 dark:bg-black/90 backdrop-blur-md flex items-center justify-center p-3 transition-colors">
               <div className="w-full max-w-md h-[90vh] bg-zinc-100 dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 flex flex-col justify-between overflow-hidden p-3 shadow-2xl">
@@ -1246,7 +1235,6 @@ export function SessionPage({
           </div>
         </div>
       ) : (
-        /* WIZARD PAGEVIEW */
         <div className="pt-[max(0.5rem,env(safe-area-inset-top))] space-y-4 max-w-md mx-auto min-h-[82vh] flex flex-col justify-between">
           <input
             ref={galleryInputRef}
@@ -1256,7 +1244,6 @@ export function SessionPage({
             className="hidden"
           />
 
-          {/* Header & Step Indicator */}
           <div className="space-y-3">
             <div className="flex items-center justify-between pt-1">
               <button
@@ -1303,13 +1290,11 @@ export function SessionPage({
           </div>
 
           <div className="flex-1 flex flex-col justify-between">
-            {/* Sliding Container */}
             <div className="overflow-hidden relative flex-1 py-2">
               <div
                 className="flex transition-transform duration-300 ease-out h-full"
                 style={{ transform: `translateX(-${(currentStep - 1) * 100}%)` }}
               >
-                {/* STEP 1: DESTINATION & MAP */}
                 <div className="w-full shrink-0 space-y-5 px-1">
                   <div className="space-y-1">
                     <h2 className="text-lg font-black text-black dark:text-white flex items-center gap-2">
@@ -1393,7 +1378,6 @@ export function SessionPage({
                   </div>
                 </div>
 
-                {/* STEP 2: RETURN TIME & DAY */}
                 <div className="w-full shrink-0 space-y-5 px-1">
                   <div className="space-y-1">
                     <h2 className="text-lg font-black text-black dark:text-white flex items-center gap-2">
@@ -1463,7 +1447,6 @@ export function SessionPage({
                   </div>
                 </div>
 
-                {/* STEP 3: CHECK-IN & ALERT TIMERS */}
                 <div className="w-full shrink-0 space-y-5 px-1">
                   <div className="space-y-1">
                     <h2 className="text-lg font-black text-black dark:text-white flex items-center gap-2">
@@ -1508,7 +1491,6 @@ export function SessionPage({
                   </div>
                 </div>
 
-                {/* STEP 4: GUARDIANS, SELFIE & NOTES */}
                 <div className="w-full shrink-0 space-y-5 px-1">
                   <div className="space-y-1">
                     <h2 className="text-lg font-black text-black dark:text-white flex items-center gap-2">
@@ -1636,7 +1618,6 @@ export function SessionPage({
                     )}
                   </div>
 
-                  {/* Selfie / Proof & Notes */}
                   <div className="space-y-2.5">
                     <label className="block text-xs font-extrabold text-black dark:text-white">
                       Selfie / Proof & Notes (Optional)
@@ -1696,7 +1677,6 @@ export function SessionPage({
               </div>
             </div>
 
-            {/* Wizard Action Bar */}
             <div className="pt-4 pb-4 flex items-center gap-3">
               {currentStep > 1 && (
                 <button

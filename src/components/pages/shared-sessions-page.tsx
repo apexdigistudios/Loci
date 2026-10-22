@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Radio,
   Loader2,
@@ -65,7 +65,6 @@ function getSessionCoordinates(session: SharedSession) {
   };
   const geoJsonCoordinates = Array.isArray(location.coordinates) ? location.coordinates : [];
   
-  // Strictly extract sender coordinates from metadata or current session columns
   const latitude = readCoordinate(metadata.latitude, row.current_lat, row.latitude, row.lat, row.location_latitude, row.last_latitude, location.latitude, location.lat, geoJsonCoordinates[1]);
   const longitude = readCoordinate(metadata.longitude, row.current_lng, row.longitude, row.lng, row.location_longitude, row.last_longitude, location.longitude, location.lng, geoJsonCoordinates[0]);
 
@@ -112,7 +111,7 @@ export function SharedSessionsPage({
   const [sharedSessions, setSharedSessions] = useState<SharedSession[]>([]);
   const [historySessions, setHistorySessions] = useState<SharedSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
-  const [activeDetailSession, setActiveDetailSession] = useState<SharedSession | null>(null);
+  const [activeDetailSessionId, setActiveDetailSessionId] = useState<string | null>(null);
   const [detailNow, setDetailNow] = useState(0);
   const [shareFeedback, setShareFeedback] = useState("");
   const [historyTab, setHistoryTab] = useState<"sent" | "received">("sent");
@@ -122,14 +121,16 @@ export function SharedSessionsPage({
   const [showDirections, setShowDirections] = useState(false);
   const [currentUserProfile, setCurrentUserProfile] = useState<{ nickname?: string; avatar_url?: string } | null>(null);
 
-  const activeDetailSessionId = activeDetailSession?.id;
+  const activeDetailSession = useMemo(() => {
+    if (!activeDetailSessionId) return null;
+    return [...sharedSessions, ...historySessions].find((s) => s.id === activeDetailSessionId) || null;
+  }, [activeDetailSessionId, sharedSessions, historySessions]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setDetailNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
-  // Fetch current user profile (avatar & nickname) for the receiver marker
   useEffect(() => {
     if (!currentUserId && !userPhone) return;
     async function fetchMyProfile() {
@@ -150,14 +151,13 @@ export function SharedSessionsPage({
     void fetchMyProfile();
   }, [currentUserId, userPhone]);
 
-  // Continuously watch receiver's live geolocation as they move
   useEffect(() => {
     if (typeof navigator === "undefined" || !navigator.geolocation) return;
     const watchId = navigator.geolocation.watchPosition(
       ({ coords }) => {
         setReceiverCoords({ latitude: coords.latitude, longitude: coords.longitude });
       },
-      (err) => console.warn("Live geolocation watch error:", err),
+      (err) => console.warn("Receiver geolocation watch error:", err),
       { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
     );
     return () => navigator.geolocation.clearWatch(watchId);
@@ -247,11 +247,6 @@ export function SharedSessionsPage({
 
       setSharedSessions(formattedActive);
       setHistorySessions(formattedHistory);
-      setActiveDetailSession((current) =>
-        current
-          ? [...formattedActive, ...formattedHistory].find((session) => session.id === current.id) || current
-          : null
-      );
     } catch (err) {
       console.error("Error fetching shared sessions:", err);
     } finally {
@@ -259,7 +254,6 @@ export function SharedSessionsPage({
     }
   }, [currentUserId, userPhone]);
 
-  // Real-time Supabase subscription to instantly pick up sender's location updates
   useEffect(() => {
     const loadTimer = window.setTimeout(() => void fetchSharedSessions(), 0);
 
@@ -285,7 +279,7 @@ export function SharedSessionsPage({
     const targetSession = sharedSessions.find((session) => session.id === openSessionId);
     if (!targetSession) return;
     const openTimer = window.setTimeout(() => {
-      setActiveDetailSession(targetSession);
+      setActiveDetailSessionId(targetSession.id);
       onSessionOpened?.();
     }, 0);
     return () => window.clearTimeout(openTimer);
@@ -372,7 +366,7 @@ export function SharedSessionsPage({
       <div className="space-y-3.5 animate-in fade-in slide-in-from-right-4 min-h-[80vh] pb-8 max-w-md mx-auto px-2 sm:px-0">
         <div className="flex items-center justify-between">
           <button
-            onClick={() => setActiveDetailSession(null)}
+            onClick={() => setActiveDetailSessionId(null)}
             className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white active:scale-95 transition-all flex items-center space-x-1 pr-3 border border-zinc-200 dark:border-zinc-700 shrink-0"
           >
             <ChevronLeft className="w-4 h-4 stroke-[2.5]" />
@@ -632,7 +626,7 @@ export function SharedSessionsPage({
               <button
                 key={s.id}
                 type="button"
-                onClick={() => setActiveDetailSession(s)}
+                onClick={() => setActiveDetailSessionId(s.id)}
                 className={`w-full border p-3 rounded-xl shadow-xs flex items-center justify-between gap-3 text-left cursor-pointer transition-all group ${
                   isSosItem
                     ? "bg-red-500/10 dark:bg-red-950/30 border-red-500/40 hover:border-red-500"
@@ -720,7 +714,7 @@ export function SharedSessionsPage({
                 <button
                   key={session.id}
                   type="button"
-                  onClick={() => setActiveDetailSession(session)}
+                  onClick={() => setActiveDetailSessionId(session.id)}
                   className="w-full bg-white/80 dark:bg-zinc-900/70 border border-zinc-200/50 dark:border-zinc-800/50 p-3 rounded-xl flex items-center justify-between text-left hover:border-yellow-500/50 transition-colors gap-3"
                 >
                   <div className="min-w-0 flex-1">
