@@ -1,6 +1,7 @@
 import { normalizePhone } from "@/lib/utils";
 import { invokeNotificationApi } from "@/lib/notification-api";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
+import { supabase } from "@/lib/supabase";
 
 export type AlertType = "session_start" | "checkin" | "emergency" | "session_end" | "update" | "guardian_alert";
 
@@ -132,6 +133,27 @@ export async function dispatchAlert(request: AlertRequest): Promise<AlertDispatc
   const localPromise = request.showLocal === false
     ? Promise.resolve(false)
     : showLocalNotification(request.title, request.message, url, type);
+
+  // Persist check-in and session alerts to Supabase notifications table for UUID users
+  const dbPersistPromises = targets
+    .filter((target) => UUID_PATTERN.test(target))
+    .map(async (uuidTarget) => {
+      try {
+        await supabase.from("notifications").insert({
+          user_id: uuidTarget,
+          title: request.title,
+          message: request.message,
+          type,
+          url,
+          session_id: request.sessionId || null,
+          metadata: request.metadata || null,
+          read: false,
+        });
+      } catch (err) {
+        console.warn("Failed to persist alert to database notifications table:", err);
+      }
+    });
+
   const pushPromise = targets.length > 0
     ? invokeNotificationApi<{ delivered: number; notificationCount: number }>({
         action: "send",
@@ -145,7 +167,12 @@ export async function dispatchAlert(request: AlertRequest): Promise<AlertDispatc
       })
     : Promise.resolve({ delivered: 0, notificationCount: 0 });
 
-  const [localResult, pushResult] = await Promise.allSettled([localPromise, pushPromise]);
+  const [localResult, , pushResult] = await Promise.allSettled([
+    localPromise,
+    Promise.all(dbPersistPromises),
+    pushPromise,
+  ]);
+  
   const push = pushResult.status === "fulfilled" ? pushResult.value : null;
   return {
     localShown: localResult.status === "fulfilled" && localResult.value,

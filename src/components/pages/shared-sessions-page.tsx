@@ -14,10 +14,14 @@ import {
   Navigation,
   Plus,
   ExternalLink,
+  Maximize2,
+  Minimize2,
+  Lock,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { SatelliteMap } from "../ui/satellite-map";
 import { cleanPhone } from "@/lib/utils";
+import { useSubscription } from "@/hooks/use-subscription";
 
 export interface Contact {
   id: string;
@@ -55,18 +59,29 @@ function getSessionCoordinates(session: SharedSession) {
   const location = locationValue && typeof locationValue === "object"
     ? locationValue as Record<string, unknown>
     : {};
+  const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata as Record<string, unknown> : {};
+  
   const readCoordinate = (...values: unknown[]) => {
     const value = values.find((candidate) => candidate !== undefined && candidate !== null && candidate !== "");
     const coordinate = typeof value === "number" ? value : Number(value);
     return Number.isFinite(coordinate) ? coordinate : null;
   };
   const geoJsonCoordinates = Array.isArray(location.coordinates) ? location.coordinates : [];
-  const latitude = readCoordinate(row.current_lat, row.latitude, row.lat, row.location_latitude, row.last_latitude, location.latitude, location.lat, geoJsonCoordinates[1]);
-  const longitude = readCoordinate(row.current_lng, row.longitude, row.lng, row.location_longitude, row.last_longitude, location.longitude, location.lng, geoJsonCoordinates[0]);
+  const latitude = readCoordinate(metadata.latitude, row.current_lat, row.latitude, row.lat, row.location_latitude, row.last_latitude, location.latitude, location.lat, geoJsonCoordinates[1]);
+  const longitude = readCoordinate(metadata.longitude, row.current_lng, row.longitude, row.lng, row.location_longitude, row.last_longitude, location.longitude, location.lng, geoJsonCoordinates[0]);
 
   return latitude !== null && longitude !== null && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180
     ? { latitude, longitude }
     : null;
+}
+
+function getSessionLocationAddress(session: SharedSession): string {
+  const row = session as Record<string, unknown>;
+  const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata as Record<string, unknown> : {};
+  if (typeof metadata.address === "string" && metadata.address.trim()) {
+    return metadata.address;
+  }
+  return "";
 }
 
 function formatSessionDuration(startedAt: string, expectedArrivalAt: string) {
@@ -118,6 +133,7 @@ interface SharedSessionsPageProps {
   contacts: Contact[];
   openSessionId?: string | null;
   onSessionOpened?: () => void;
+  onNavigate?: (tab: "home" | "session" | "contacts" | "share" | "profile") => void;
 }
 
 export function SharedSessionsPage({
@@ -126,7 +142,9 @@ export function SharedSessionsPage({
   contacts,
   openSessionId,
   onSessionOpened,
+  onNavigate,
 }: SharedSessionsPageProps) {
+  const { tier } = useSubscription(currentUserId || undefined);
   const [sharedSessions, setSharedSessions] = useState<SharedSession[]>([]);
   const [historySessions, setHistorySessions] = useState<SharedSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -135,12 +153,31 @@ export function SharedSessionsPage({
   const [detailNow, setDetailNow] = useState(0);
   const [shareFeedback, setShareFeedback] = useState("");
   const [historyTab, setHistoryTab] = useState<"sent" | "received">("sent");
+  
+  // Map expansion & Receiver-to-Sender directions state
+  const [isMapFullScreen, setIsMapFullScreen] = useState(false);
+  const [receiverCoords, setReceiverCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [showDirections, setShowDirections] = useState(false);
+
   const mapSectionRef = useRef<HTMLDivElement>(null);
   const activeDetailSessionId = activeDetailSession?.id;
 
   useEffect(() => {
     const timer = window.setInterval(() => setDetailNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  // Acquire receiver's GPS coordinates for drawing directions
+  useEffect(() => {
+    if (typeof navigator !== "undefined" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        ({ coords }) => {
+          setReceiverCoords({ latitude: coords.latitude, longitude: coords.longitude });
+        },
+        (err) => console.warn("Could not acquire receiver location for directions:", err),
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    }
   }, []);
 
   useEffect(() => {
@@ -292,6 +329,10 @@ export function SharedSessionsPage({
     ? getSessionCoordinates(activeDetailSession)
     : null;
 
+  const activeDetailAddress = activeDetailSession
+    ? getSessionLocationAddress(activeDetailSession)
+    : "";
+
   const isSessionSender = (session: SharedSession) => {
     if (currentUserId && session.user_id === currentUserId) return true;
     return cleanPhone(session.user_phone) === cleanPhone(userPhone);
@@ -372,6 +413,7 @@ export function SharedSessionsPage({
     const isSender = isSessionSender(activeDetailSession);
     const ownerName = getSenderDisplayName(activeDetailSession);
     const isActive = activeDetailSession.status === "active";
+    const isSosEmergency = activeDetailSession.notes?.includes("SOS") || activeDetailSession.destination?.includes("SOS");
 
     const expectedArrivalMs = new Date(activeDetailSession.expected_arrival_at).getTime();
     const lastCheckinMs = new Date(activeDetailSession.last_user_checkin_at || activeDetailSession.created_at).getTime();
@@ -501,63 +543,131 @@ export function SharedSessionsPage({
           </section>
         )}
 
-        {/* Map View for Active vs Coordinates Display for Ended */}
-        <div ref={mapSectionRef} className="space-y-2 scroll-mt-4">
-          <div className="flex items-center justify-between px-1">
-            <h4 className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center space-x-1">
-              <MapPin className="w-3.5 h-3.5 text-yellow-500" />
-              <span>{isActive ? "Live GPS Location" : "Last Reported Coordinates"}</span>
-            </h4>
-            {isActive && activeDetailCoordinates && (
-              <span className="text-[9px] font-mono text-emerald-500 font-bold flex items-center space-x-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping inline-block" />
-                <span>Connected</span>
-              </span>
-            )}
+        {/* Map View & Location Details with Directions & Expansion */}
+        <div ref={mapSectionRef} className="space-y-3 scroll-mt-4">
+          <div className="rounded-2xl border border-zinc-200/70 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/70 p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <MapPin className="w-4 h-4 shrink-0 text-emerald-500" />
+                <div className="min-w-0">
+                  <p className="text-[11px] font-extrabold text-black dark:text-white">Live Location / Pinned Address</p>
+                  <p className="text-[10px] text-zinc-600 dark:text-zinc-300 font-semibold truncate">
+                    {activeDetailAddress
+                      ? activeDetailAddress
+                      : activeDetailCoordinates
+                        ? `${activeDetailCoordinates.latitude.toFixed(5)}, ${activeDetailCoordinates.longitude.toFixed(5)}`
+                        : "No GPS coordinates recorded"}
+                  </p>
+                </div>
+              </div>
+              {activeDetailCoordinates && (
+                <button
+                  type="button"
+                  onClick={() => openInDeviceMaps(activeDetailCoordinates.latitude, activeDetailCoordinates.longitude)}
+                  className="shrink-0 text-[10px] font-extrabold text-black dark:text-white px-3 py-2 rounded-full bg-yellow-400 hover:bg-yellow-300 transition-colors"
+                >
+                  Open Maps
+                </button>
+              )}
+            </div>
           </div>
 
-          {isActive ? (
-            activeDetailCoordinates ? (
-              <div className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 shadow-xs">
+          {activeDetailCoordinates && (
+            <div className="space-y-2">
+              <div className="relative group">
+                <div onClick={() => setIsMapFullScreen(true)} className="cursor-pointer">
+                  <SatelliteMap
+                    latitude={activeDetailCoordinates.latitude}
+                    longitude={activeDetailCoordinates.longitude}
+                    nickname={ownerName}
+                    avatarUrl={activeDetailSession.user?.avatar_url}
+                    interactive={false}
+                    {...({ showDirections, receiverLocation: receiverCoords || undefined } as any)}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsMapFullScreen(true)}
+                  className="absolute top-2 right-2 p-2 rounded-xl bg-black/70 backdrop-blur-md text-white border border-zinc-700 active:scale-90 transition-all flex items-center space-x-1 text-[10px] font-bold shadow-lg"
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                  <span>Expand Map</span>
+                </button>
+              </div>
+
+              {/* Directions toggle for SOS / Received Sessions */}
+              {isSosEmergency && !isSender && (
+                <div className="rounded-2xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Navigation className="w-4 h-4 text-yellow-500" />
+                      <div>
+                        <p className="text-xs font-black text-black dark:text-white">Sender Navigation &amp; Route</p>
+                        <p className="text-[10px] text-zinc-500">Draw directions from your location to sender</p>
+                      </div>
+                    </div>
+                    {tier === "plus" ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowDirections(!showDirections)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                          showDirections
+                            ? "bg-yellow-400 text-black font-black"
+                            : "bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white"
+                        }`}
+                      >
+                        {showDirections ? "Hide Route" : "Show Route"}
+                      </button>
+                    ) : (
+                      <div className="flex items-center space-x-1 px-3 py-1.5 rounded-xl bg-yellow-400/20 text-yellow-600 dark:text-yellow-400 text-xs font-bold border border-yellow-400/30">
+                        <Lock className="w-3 h-3" />
+                        <span onClick={() => onNavigate?.("profile")} className="cursor-pointer underline">Plus Feature</span>
+                      </div>
+                    )}
+                  </div>
+                  {tier !== "plus" && (
+                    <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                      Free users can view SOS emergency location. Upgrade to Déloci Plus to unlock real-time turn-by-turn routing to the sender!
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* EXPANDED MAP MODAL */}
+        {isMapFullScreen && activeDetailCoordinates && (
+          <div className="fixed inset-0 z-99999 bg-white/95 dark:bg-black/90 backdrop-blur-md flex items-center justify-center p-3 transition-colors">
+            <div className="w-full max-w-md h-[90vh] bg-zinc-100 dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 flex flex-col justify-between overflow-hidden p-3 shadow-2xl">
+              <div className="flex items-center justify-between pb-2">
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs font-black text-black dark:text-white">Expanded Emergency Map</span>
+                  {showDirections && <span className="text-[9px] font-bold bg-yellow-400 text-black px-2 py-0.5 rounded-full">Route Active</span>}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsMapFullScreen(false)}
+                  className="p-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white text-xs font-bold flex items-center space-x-1 px-3 active:scale-95 transition-all"
+                >
+                  <Minimize2 className="w-3.5 h-3.5" />
+                  <span>Close</span>
+                </button>
+              </div>
+              <div className="flex-1 rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 relative">
                 <SatelliteMap
                   latitude={activeDetailCoordinates.latitude}
                   longitude={activeDetailCoordinates.longitude}
                   nickname={ownerName}
                   avatarUrl={activeDetailSession.user?.avatar_url}
-                  className="h-48 w-full"
+                  interactive
+                  {...({ showDirections, receiverLocation: receiverCoords || undefined } as any)}
+                  className="h-full w-full"
                 />
               </div>
-            ) : (
-              <div className="h-32 rounded-2xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 flex flex-col items-center justify-center p-3 text-center space-y-1.5">
-                <Navigation className="w-5 h-5 text-zinc-400 animate-bounce" />
-                <p className="text-xs font-medium text-zinc-500">Waiting for GPS updates...</p>
-              </div>
-            )
-          ) : (
-            <div className="bg-white/80 dark:bg-zinc-900/80 border border-zinc-200/50 dark:border-zinc-800/50 rounded-2xl p-3.5 space-y-2.5">
-              {activeDetailCoordinates ? (
-                <>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-mono text-zinc-600 dark:text-zinc-400">
-                      {activeDetailCoordinates.latitude.toFixed(5)}°, {activeDetailCoordinates.longitude.toFixed(5)}°
-                    </span>
-                    <span className="text-[10px] text-zinc-400 font-medium">GPS Fixed</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => openInDeviceMaps(activeDetailCoordinates.latitude, activeDetailCoordinates.longitude)}
-                    className="w-full bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-black dark:text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center space-x-2 transition-colors border border-zinc-200 dark:border-zinc-700"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5 text-yellow-500" />
-                    <span>Open in Maps App</span>
-                  </button>
-                </>
-              ) : (
-                <p className="text-xs text-zinc-500 text-center py-2">No GPS coordinates recorded for this session.</p>
-              )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Timestamps & Duration */}
         <div className="grid grid-cols-2 gap-2 text-xs">

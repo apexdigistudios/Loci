@@ -332,7 +332,7 @@ export function ContactsPage({
 
       {/* LONG PRESS / RIGHT CLICK CONTEXT POPUP */}
       {contextContact && (
-        <div className="fixed inset-0 z-9999 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+        <div className="fixed inset-0 z-99999 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white dark:bg-zinc-900 text-black dark:text-white border border-zinc-200 dark:border-zinc-800 rounded-3xl p-5 w-full max-w-xs space-y-4 shadow-2xl">
             <div className="flex items-center justify-between pb-2 border-b border-zinc-100 dark:border-zinc-800">
               <div className="flex items-center space-x-2">

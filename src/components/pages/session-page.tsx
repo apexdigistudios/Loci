@@ -18,6 +18,9 @@ import {
   Shield,
   Sparkles,
   Radio,
+  AlertTriangle,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { normalizePhone } from "@/lib/utils";
@@ -109,6 +112,13 @@ export function SessionPage({
   const [actionMessage, setActionMessage] = useState("");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(undefined);
 
+  // Staged & Confirmed Media (WhatsApp style full-screen preview)
+  const [stagedMedia, setStagedMedia] = useState<{
+    file: File;
+    previewUrl: string;
+    type: "image" | "video";
+  } | null>(null);
+
   const [attachedMedia, setAttachedMedia] = useState<{
     file: File;
     previewUrl: string;
@@ -116,6 +126,11 @@ export function SessionPage({
   } | null>(null);
 
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isMapFullScreen, setIsMapFullScreen] = useState(false);
+
+  // SOS modal state
+  const [showSosModal, setShowSosModal] = useState(false);
+  const [sosSending, setSosSending] = useState(false);
 
   const [selectedDayOffset, setSelectedDayOffset] = useState<number>(0);
   const [returnTimeStr, setReturnTimeStr] = useState<string>(() => {
@@ -131,10 +146,12 @@ export function SessionPage({
   const [contactSelectionMode, setContactSelectionMode] = useState<"individual" | "groups">("individual");
 
   const [locationCoords, setLocationCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locationAddress, setLocationAddress] = useState<string>("");
   const [locationStatus, setLocationStatus] = useState<"idle" | "requesting" | "granted" | "low-accuracy" | "denied">("idle");
   const [locationUpdatedAt, setLocationUpdatedAt] = useState<Date | null>(null);
   const [manuallyPickedLocation, setManuallyPickedLocation] = useState(false);
   const manuallyPickedLocationRef = useRef(false);
+  const [detectedCountryCode, setDetectedCountryCode] = useState<string>("");
 
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   const [isFetchingSuggestions, setIsFetchingSuggestions] = useState(false);
@@ -186,6 +203,29 @@ export function SessionPage({
     [contacts]
   );
 
+  // Auto-detect country and fetch readable address name from user GPS coordinates
+  useEffect(() => {
+    if (!locationCoords) return;
+    const fetchLocationDetails = async () => {
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${locationCoords.latitude}&lon=${locationCoords.longitude}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.address?.country_code) {
+            setDetectedCountryCode(data.address.country_code.toLowerCase());
+          }
+          if (data?.display_name) {
+            setLocationAddress(data.display_name);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch location details:", err);
+      }
+    };
+    void fetchLocationDetails();
+  }, [locationCoords]);
+
+  // Destination autocomplete with detected country restriction
   useEffect(() => {
     if (!destination || destination.trim().length < 2 || !showSuggestions) {
       const frameId = window.requestAnimationFrame(() => setSuggestions([]));
@@ -200,7 +240,11 @@ export function SessionPage({
           destination.trim()
         )}&limit=5`;
 
-        if (locationCoords) {
+        if (detectedCountryCode) {
+          url += `&countrycodes=${detectedCountryCode}`;
+        }
+
+        if (locationCoords && !detectedCountryCode) {
           const minLon = locationCoords.longitude - 3;
           const maxLat = locationCoords.latitude + 3;
           const maxLon = locationCoords.longitude + 3;
@@ -226,7 +270,7 @@ export function SessionPage({
       controller.abort();
       clearTimeout(timer);
     };
-  }, [destination, showSuggestions, locationCoords]);
+  }, [destination, showSuggestions, locationCoords, detectedCountryCode]);
 
   const requestCurrentLocation = useCallback(() => {
     if (!navigator.geolocation) {
@@ -265,7 +309,23 @@ export function SessionPage({
       () => setLocationStatus("denied"),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 }
     );
-  }, [activeSession, setLocationCoords, setLocationUpdatedAt, setManuallyPickedLocation, setLocationStatus]);
+  }, [activeSession]);
+
+  // Location on map auto-refreshes every 5 mins
+  useEffect(() => {
+    requestCurrentLocation();
+    const refreshInterval = setInterval(() => {
+      requestCurrentLocation();
+    }, 5 * 60 * 1000);
+
+    return () => {
+      clearInterval(refreshInterval);
+      if (locationWatchIdRef.current !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(locationWatchIdRef.current);
+        locationWatchIdRef.current = null;
+      }
+    };
+  }, [requestCurrentLocation]);
 
   const handleLocationPicked = (coordinates: SessionCoordinates) => {
     manuallyPickedLocationRef.current = true;
@@ -289,25 +349,6 @@ export function SessionPage({
         });
     }
   };
-
-  useEffect(() => {
-    if (!activeSession || manuallyPickedLocationRef.current) return;
-
-    requestCurrentLocation();
-    return () => {
-      if (locationWatchIdRef.current !== null && navigator.geolocation) {
-        navigator.geolocation.clearWatch(locationWatchIdRef.current);
-        locationWatchIdRef.current = null;
-      }
-    };
-  }, [activeSession, requestCurrentLocation]);
-
-  useEffect(() => () => {
-    if (locationWatchIdRef.current !== null && navigator.geolocation) {
-      navigator.geolocation.clearWatch(locationWatchIdRef.current);
-      locationWatchIdRef.current = null;
-    }
-  }, []);
 
   useEffect(() => {
     if (!activeSession || !("wakeLock" in navigator)) return;
@@ -353,6 +394,7 @@ export function SessionPage({
     return options;
   }, []);
 
+  // Free users active session lasts for just 1 day max. More than 1 day requires upgrade.
   useEffect(() => {
     const frameId = window.requestAnimationFrame(() => {
       if (activeSession?.expected_arrival_at) {
@@ -365,12 +407,19 @@ export function SessionPage({
           targetDate.setHours(hours, minutes, 0, 0);
         }
         const calculatedMinutes = Math.max(1, Math.round((targetDate.getTime() - Date.now()) / 60000));
+
+        if (tier === "free" && (selectedDayOffset > 0 || calculatedMinutes > 1440)) {
+          setActionMessage("Free users' active sessions can last for up to 1 day only. Upgrade to Plus for unlimited duration!");
+          setSelectedDayOffset(0);
+          return;
+        }
+
         setDurationMinutes(calculatedMinutes);
         setTargetEndTime(targetDate.getTime());
       }
     });
     return () => window.cancelAnimationFrame(frameId);
-  }, [selectedDayOffset, returnTimeStr, activeSession, setDurationMinutes]);
+  }, [selectedDayOffset, returnTimeStr, activeSession, setDurationMinutes, tier]);
 
   useEffect(() => {
     if (!targetEndTime) return;
@@ -390,6 +439,7 @@ export function SessionPage({
     activeSession.last_user_checkin_at || activeSession.expected_arrival_at
   ).getTime() >= (activeSession.user_reminder_mins || 15) * 60000;
 
+  // Check-in alerts and safety notices also go to notification page
   useEffect(() => {
     if (!activeSession || activeSession.status !== "active") return;
 
@@ -449,7 +499,7 @@ export function SessionPage({
           type: "emergency",
           url: "/main?tab=contacts",
           sessionId: activeSession.id,
-          metadata: { destination: activeSession.destination },
+          metadata: { destination: activeSession.destination, address: locationAddress },
         });
       }
     };
@@ -466,7 +516,7 @@ export function SessionPage({
       document.removeEventListener("visibilitychange", evaluateWhenVisible);
       window.removeEventListener("focus", evaluateSafetyAlerts);
     };
-  }, [activeSession, userId, guardianUserIds]);
+  }, [activeSession, userId, guardianUserIds, locationAddress]);
 
   const handleCheckInClick = async () => {
     if (isCheckingIn) return;
@@ -544,6 +594,63 @@ export function SessionPage({
     }
   };
 
+  // Emergency SOS feature sending coordinates and location address
+  const handleTriggerSos = async () => {
+    if (sosSending) return;
+    const sosCountKey = `deloci_sos_uses_${userId || "guest"}`;
+    const usedSos = Number(localStorage.getItem(sosCountKey) || "0");
+
+    if (tier === "free" && usedSos >= 3) {
+      setActionMessage("Free users can only use Emergency SOS 3 times. Upgrade to Plus for unlimited emergency broadcasts!");
+      setShowSosModal(false);
+      return;
+    }
+
+    setSosSending(true);
+    try {
+      localStorage.setItem(sosCountKey, String(usedSos + 1));
+      
+      const sosMessage = `🚨 URGENT: Emergency SOS triggered! Current Location: ${locationAddress || "Unknown Address"} (${locationCoords ? `${locationCoords.latitude.toFixed(5)},${locationCoords.longitude.toFixed(5)}` : "No GPS"})`;
+
+      void dispatchAlert({
+        userIds: userId || "",
+        title: "🚨 EMERGENCY SOS BROADCASTED",
+        message: sosMessage,
+        type: "emergency",
+        sessionId: activeSession?.id,
+        metadata: {
+          latitude: locationCoords?.latitude,
+          longitude: locationCoords?.longitude,
+          address: locationAddress,
+        },
+      });
+
+      if (guardianUserIds.length > 0) {
+        void dispatchAlert({
+          userIds: guardianUserIds,
+          title: "🚨 EMERGENCY SOS FROM GUARDIAN",
+          message: sosMessage,
+          type: "emergency",
+          url: "/main?tab=contacts",
+          sessionId: activeSession?.id,
+          metadata: {
+            latitude: locationCoords?.latitude,
+            longitude: locationCoords?.longitude,
+            address: locationAddress,
+          },
+        });
+      }
+
+      setActionMessage("Emergency SOS broadcasted successfully with your live location!");
+      setShowSosModal(false);
+    } catch (err) {
+      console.error("SOS transmission failed:", err);
+      setActionMessage("Failed to send Emergency SOS. Please try again.");
+    } finally {
+      setSosSending(false);
+    }
+  };
+
   const formatTime = (totalSecs: number) => {
     const hrs = Math.floor(totalSecs / 3600);
     const mins = Math.floor((totalSecs % 3600) / 60);
@@ -583,7 +690,7 @@ export function SessionPage({
       fallbackInput.onchange = (e: Event) => {
         const file = (e.target as HTMLInputElement).files?.[0];
         if (file) {
-          setAttachedMedia({
+          setStagedMedia({
             file,
             previewUrl: URL.createObjectURL(file),
             type: "image",
@@ -607,7 +714,7 @@ export function SessionPage({
           const file = new File([blob], `selfie-${Date.now()}.jpg`, {
             type: "image/jpeg",
           });
-          setAttachedMedia({
+          setStagedMedia({
             file,
             previewUrl: URL.createObjectURL(file),
             type: "image",
@@ -631,11 +738,18 @@ export function SessionPage({
     if (!file) return;
 
     const isVideo = file.type.startsWith("video/");
-    setAttachedMedia({
+    setStagedMedia({
       file,
       previewUrl: URL.createObjectURL(file),
       type: isVideo ? "video" : "image",
     });
+  };
+
+  const confirmStagedMedia = () => {
+    if (stagedMedia) {
+      setAttachedMedia(stagedMedia);
+      setStagedMedia(null);
+    }
   };
 
   const removeMedia = () => {
@@ -705,6 +819,47 @@ export function SessionPage({
         </div>
       )}
 
+      {/* WHATSAPP-STYLE FULL SCREEN MEDIA PREVIEW SHEET */}
+      {stagedMedia && (
+        <div className="fixed inset-0 z-99999 bg-black flex flex-col justify-between p-4 max-w-md mx-auto animate-in fade-in">
+          <div className="flex items-center justify-between pt-[max(0.75rem,env(safe-area-inset-top))] z-10 px-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (stagedMedia.previewUrl) URL.revokeObjectURL(stagedMedia.previewUrl);
+                setStagedMedia(null);
+              }}
+              className="p-3 rounded-full bg-zinc-900/80 text-white backdrop-blur-xl active:scale-90 transition-all border border-zinc-800"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <span className="text-xs font-mono font-bold uppercase text-zinc-300 tracking-widest bg-zinc-900/80 px-4 py-1.5 rounded-full border border-zinc-800">
+              Preview Media
+            </span>
+            <div className="w-11" />
+          </div>
+
+          <div className="absolute inset-0 overflow-hidden flex items-center justify-center bg-black p-4">
+            {stagedMedia.type === "image" ? (
+              <img src={stagedMedia.previewUrl} alt="Preview" className="max-w-full max-h-[80vh] object-contain rounded-2xl" />
+            ) : (
+              <video src={stagedMedia.previewUrl} controls className="max-w-full max-h-[80vh] object-contain rounded-2xl" />
+            )}
+          </div>
+
+          <div className="relative z-10 pb-[max(1.5rem,env(safe-area-inset-bottom))] flex items-center justify-center px-4">
+            <button
+              type="button"
+              onClick={confirmStagedMedia}
+              className="w-full max-w-sm bg-yellow-400 hover:bg-yellow-300 text-black font-black py-4 rounded-2xl text-xs shadow-xl flex items-center justify-center space-x-2 active:scale-95 transition-all"
+            >
+              <Check className="w-4 h-4 stroke-3" />
+              <span>Confirm & Attach to Session</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* CAMERA OVERLAY */}
       {isCameraActive && (
         <div className="fixed inset-0 z-100 bg-black flex flex-col justify-between p-4 max-w-md mx-auto">
@@ -747,11 +902,45 @@ export function SessionPage({
         </div>
       )}
 
+      {/* THEME-ADAPTIVE SOS CONFIRMATION MODAL */}
+      {showSosModal && (
+        <div className="fixed inset-0 z-99999 bg-black/60 dark:bg-black/70 backdrop-blur-md flex items-center justify-center p-4 transition-colors">
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-3xl p-6 w-full max-w-xs space-y-4 text-center shadow-2xl">
+            <div className="w-12 h-12 rounded-full bg-red-500/20 text-red-500 flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-black text-black dark:text-white">Trigger Emergency SOS?</h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                This will immediately broadcast an urgent emergency signal with your live location (<span className="font-bold text-red-600 dark:text-red-400">{locationAddress || "Acquiring GPS..."}</span>) to all your circle guardians.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowSosModal(false)}
+                className="py-2.5 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-black dark:text-white font-bold text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleTriggerSos()}
+                disabled={sosSending}
+                className="py-2.5 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-lg flex items-center justify-center space-x-1"
+              >
+                {sosSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Confirm SOS</span>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ACTIVE WATCH PAGEVIEW */}
       {activeSession ? (
         <div className="pt-2 space-y-6 min-h-[82vh] flex flex-col justify-between max-w-md mx-auto">
           <div className="space-y-6">
-            <div className="flex items-center justify-start">
+            <div className="flex items-center justify-between">
               <button
                 onClick={() => onNavigate("home")}
                 className="p-2.5 rounded-full bg-zinc-200/60 dark:bg-zinc-900/60 backdrop-blur-xl text-black dark:text-white active:scale-90 transition-all shadow-sm flex items-center space-x-1.5 pr-4 border border-zinc-300/40 dark:border-zinc-800/50"
@@ -759,43 +948,46 @@ export function SessionPage({
                 <ChevronLeft className="w-4 h-4 stroke-[2.5]" />
                 <span className="text-xs font-bold">Home</span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => setShowSosModal(true)}
+                className="px-4 py-2 rounded-full bg-red-600 text-white text-xs font-black flex items-center space-x-1.5 shadow-md shadow-red-600/30 active:scale-95 transition-all animate-pulse"
+              >
+                <AlertTriangle className="w-4 h-4" />
+                <span>SOS</span>
+              </button>
             </div>
 
-            <div className="flex flex-col items-center justify-center space-y-3 pt-1">
-              <div className="p-3 bg-zinc-200/50 dark:bg-zinc-900/60 border border-zinc-300/40 dark:border-zinc-800/60 rounded-2xl shadow-sm">
-                <MapPin className="w-6 h-6 text-yellow-400" />
-              </div>
-
-              <div className="flex flex-wrap items-center justify-center gap-3 px-2">
-                {sharedContacts.length === 0 ? (
-                  <div className="w-9 h-9 rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center border-2 border-black">
-                    <User className="w-4 h-4" />
+            {/* Recipient Details: Name and group category only */}
+            <div className="flex items-center space-x-3 px-3 py-3 rounded-2xl bg-zinc-100/80 dark:bg-zinc-900/80 border border-zinc-200/60 dark:border-zinc-800">
+              {sharedContacts.length === 0 ? (
+                <div className="w-12 h-12 rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center shrink-0">
+                  <User className="w-6 h-6" />
+                </div>
+              ) : (
+                <div className="relative w-12 h-12 rounded-full overflow-hidden bg-zinc-900 text-yellow-400 border-2 border-black font-black text-xs flex items-center justify-center uppercase shrink-0 shadow-md">
+                  {sharedContacts[0].avatar_url ? (
+                    <img src={sharedContacts[0].avatar_url} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    sharedContacts[0].name.slice(0, 2)
+                  )}
+                  <div className="absolute bottom-0 right-0 w-4 h-4 rounded-full bg-black border border-zinc-800 flex items-center justify-center">
+                    {sharedContacts[0].isLociUser ? (
+                      <Zap className="w-3 h-3 text-yellow-400 fill-yellow-400" />
+                    ) : (
+                      <MessageSquare className="w-2.5 h-2.5 text-zinc-400" />
+                    )}
                   </div>
-                ) : (
-                  sharedContacts.map((c) => (
-                    <div
-                      key={c.id}
-                      className="flex flex-col items-center gap-1.5"
-                      title={`${c.name} (${c.isLociUser ? "Déloci Guardian Active" : "SMS Alert Ready"})`}
-                    >
-                      <div className="relative w-10 h-10 rounded-full overflow-hidden bg-zinc-900 text-yellow-400 border-2 border-black font-black text-[11px] flex items-center justify-center uppercase shadow-md">
-                        {c.avatar_url ? (
-                          <img src={c.avatar_url} alt={`${c.name}'s profile`} className="w-full h-full object-cover" />
-                        ) : (
-                          c.name.slice(0, 2)
-                        )}
-                        <div className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full bg-black border border-zinc-800 flex items-center justify-center">
-                          {c.isLociUser ? (
-                            <Zap className="w-2.5 h-2.5 text-yellow-400 fill-yellow-400" />
-                          ) : (
-                            <MessageSquare className="w-2 h-2 text-zinc-400" />
-                          )}
-                        </div>
-                      </div>
-                      <span className="max-w-20 truncate text-[10px] font-bold text-zinc-600 dark:text-zinc-300">{c.name}</span>
-                    </div>
-                  ))
-                )}
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-black text-black dark:text-white truncate">
+                  {sharedContacts.length > 0 ? sharedContacts.map(c => c.name).join(", ") : "No recipient selected"}
+                </p>
+                <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">
+                  Guardian Circle: <span className="font-bold text-yellow-500">{sharedContacts[0]?.group_category || "Direct Contact"}</span>
+                </p>
               </div>
             </div>
 
@@ -835,15 +1027,17 @@ export function SessionPage({
                   <div className="flex items-center gap-2 min-w-0">
                     <MapPin className={`w-4 h-4 shrink-0 ${locationStatus === "granted" ? "text-emerald-500" : "text-yellow-400"}`} />
                     <div className="min-w-0">
-                      <p className="text-[11px] font-extrabold text-black dark:text-white">Live location</p>
-                      <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">
-                        {locationCoords
-                          ? `${locationCoords.latitude.toFixed(5)}, ${locationCoords.longitude.toFixed(5)}`
-                          : locationStatus === "denied"
-                            ? "Location permission unavailable"
+                      <p className="text-[11px] font-extrabold text-black dark:text-white">Live Location / Pinned Address</p>
+                      <p className="text-[10px] text-zinc-600 dark:text-zinc-300 font-semibold truncate">
+                        {locationAddress
+                          ? locationAddress
+                          : locationCoords
+                            ? `${locationCoords.latitude.toFixed(5)}, ${locationCoords.longitude.toFixed(5)}`
+                            : locationStatus === "denied"
+                              ? "Location permission unavailable"
                               : locationStatus === "requesting" || locationStatus === "idle"
                                 ? "Acquiring High-Precision GPS..."
-                              : "Waiting for GPS permission"}
+                                : "Waiting for GPS permission"}
                       </p>
                     </div>
                   </div>
@@ -868,24 +1062,66 @@ export function SessionPage({
                 )}
                 {locationUpdatedAt && (
                   <p className="text-[9px] text-zinc-400">
-                    Updated {locationUpdatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    Updated {locationUpdatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} (Auto-refreshes every 5m)
                   </p>
                 )}
               </div>
 
               {locationCoords && (
-                <SatelliteMap
-                  latitude={locationCoords.latitude}
-                  longitude={locationCoords.longitude}
-                  nickname="You"
-                  avatarUrl={userAvatarUrl}
-                  interactive
-                  manuallyPicked={manuallyPickedLocation}
-                  onLocationChange={handleLocationPicked}
-                />
+                <div className="relative group">
+                  <div onClick={() => setIsMapFullScreen(true)} className="cursor-pointer">
+                    <SatelliteMap
+                      latitude={locationCoords.latitude}
+                      longitude={locationCoords.longitude}
+                      nickname="You"
+                      avatarUrl={userAvatarUrl}
+                      interactive={false}
+                      manuallyPicked={manuallyPickedLocation}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsMapFullScreen(true)}
+                    className="absolute top-2 right-2 p-2 rounded-xl bg-black/70 backdrop-blur-md text-white border border-zinc-700 active:scale-90 transition-all flex items-center space-x-1 text-[10px] font-bold"
+                  >
+                    <Maximize2 className="w-3.5 h-3.5" />
+                    <span>Expand</span>
+                  </button>
+                </div>
               )}
             </div>
           </div>
+
+          {/* THEME-ADAPTIVE MOBILE-SIZED EXPANDED MAP MODAL */}
+          {isMapFullScreen && locationCoords && (
+            <div className="fixed inset-0 z-99999 bg-white/95 dark:bg-black/90 backdrop-blur-md flex items-center justify-center p-3 transition-colors">
+              <div className="w-full max-w-md h-[90vh] bg-zinc-100 dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 flex flex-col justify-between overflow-hidden p-3 shadow-2xl">
+                <div className="flex items-center justify-between pb-2">
+                  <span className="text-xs font-black text-black dark:text-white">Live Mobile Map</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsMapFullScreen(false)}
+                    className="p-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 text-black dark:text-white text-xs font-bold flex items-center space-x-1 px-3 active:scale-95 transition-all"
+                  >
+                    <Minimize2 className="w-3.5 h-3.5" />
+                    <span>Close</span>
+                  </button>
+                </div>
+                <div className="flex-1 rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800">
+                  <SatelliteMap
+                    latitude={locationCoords.latitude}
+                    longitude={locationCoords.longitude}
+                    nickname="You"
+                    avatarUrl={userAvatarUrl}
+                    interactive
+                    manuallyPicked={manuallyPickedLocation}
+                    onLocationChange={handleLocationPicked}
+                    className="h-full w-full"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="pb-6">
             <button
@@ -974,7 +1210,7 @@ export function SessionPage({
                       <MapPin className="w-5 h-5 text-yellow-400" />
                     </h2>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      Specify your destination address and set departure GPS.
+                      Specify your destination address in your detected country and set departure GPS.
                     </p>
                   </div>
 
@@ -986,7 +1222,7 @@ export function SessionPage({
                       <MapPin className="w-4 h-4 absolute left-4 text-zinc-400 z-10" />
                       <input
                         type="text"
-                        placeholder="e.g. Osu Oxford Street or Home"
+                        placeholder="e.g. Street or Landmark"
                         value={destination}
                         onChange={(e) => {
                           setDestination(e.target.value);
@@ -1058,7 +1294,7 @@ export function SessionPage({
                       <Clock className="w-5 h-5 text-yellow-400" />
                     </h2>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      Pick your return day and target arrival time.
+                      Pick your return day and target arrival time {tier === "free" ? "(Max 1 day for Free users)" : "(Unlimited for Plus)"}.
                     </p>
                   </div>
 
@@ -1071,7 +1307,13 @@ export function SessionPage({
                         <button
                           key={opt.offset}
                           type="button"
-                          onClick={() => setSelectedDayOffset(opt.offset)}
+                          onClick={() => {
+                            if (tier === "free" && opt.offset > 0) {
+                              setActionMessage("Free users are limited to 1-day sessions. Upgrade to Plus for multi-day sessions!");
+                              return;
+                            }
+                            setSelectedDayOffset(opt.offset);
+                          }}
                           className={`px-3.5 py-2.5 rounded-2xl text-xs font-extrabold shrink-0 transition-all border ${
                             selectedDayOffset === opt.offset
                               ? "bg-yellow-400 text-black border-yellow-400 shadow-md shadow-yellow-400/20 scale-105"
@@ -1114,7 +1356,7 @@ export function SessionPage({
                   </div>
                 </div>
 
-                {/* STEP 3: CHECK-IN & ALERT TIMERS */}
+                {/* STEP 3: CHECK-IN & ALERT TIMERS (Free for all users) */}
                 <div className="w-full shrink-0 space-y-5 px-1">
                   <div className="space-y-1">
                     <h2 className="text-lg font-black text-black dark:text-white flex items-center gap-2">
@@ -1287,26 +1529,29 @@ export function SessionPage({
                     )}
                   </div>
 
-                  {/* OPTIONAL SELFIE & NOTES */}
+                  {/* Selfie / Proof & Notes */}
                   <div className="space-y-2.5">
                     <label className="block text-xs font-extrabold text-black dark:text-white">
                       Selfie / Proof & Notes (Optional)
                     </label>
 
                     {attachedMedia ? (
-                      <div className="relative rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-800 h-28 flex items-center justify-center">
+                      <div className="relative rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-700/60 h-36 flex items-center justify-center shadow-lg">
                         {attachedMedia.type === "image" ? (
-                          <img src={attachedMedia.previewUrl} alt="Selfie proof" className="w-full h-full object-cover" />
+                          <img src={attachedMedia.previewUrl} alt="Selfie preview" className="w-full h-full object-cover" />
                         ) : (
                           <div className="relative w-full h-full bg-black flex items-center justify-center">
                             <video src={attachedMedia.previewUrl} className="w-full h-full object-cover" />
                             <Play className="w-8 h-8 text-white absolute fill-white opacity-80" />
                           </div>
                         )}
+                        <div className="absolute bottom-2 left-2 bg-black/70 backdrop-blur-md px-2.5 py-1 rounded-full text-[10px] text-white font-medium">
+                          Attached ✓
+                        </div>
                         <button
                           type="button"
                           onClick={removeMedia}
-                          className="absolute top-2 right-2 p-1.5 rounded-full bg-black/70 text-white backdrop-blur-md"
+                          className="absolute top-2 right-2 p-1.5 rounded-full bg-black/80 text-white backdrop-blur-md hover:bg-red-600 transition-colors"
                         >
                           <X className="w-4 h-4" />
                         </button>
@@ -1316,18 +1561,18 @@ export function SessionPage({
                         <button
                           type="button"
                           onClick={startCamera}
-                          className="flex items-center justify-center space-x-2 py-2.5 px-3 rounded-2xl bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 text-xs font-extrabold text-black dark:text-white"
+                          className="flex items-center justify-center space-x-2 py-3 px-3 rounded-2xl bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-300 dark:border-zinc-700 text-xs font-bold text-black dark:text-white hover:border-yellow-400 transition-all"
                         >
                           <Camera className="w-4 h-4 text-zinc-400" />
-                          <span>Selfie 🤳</span>
+                          <span>Take Selfie</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => galleryInputRef.current?.click()}
-                          className="flex items-center justify-center space-x-2 py-2.5 px-3 rounded-2xl bg-zinc-200/60 dark:bg-zinc-900/80 border border-zinc-300/50 dark:border-zinc-800 text-xs font-extrabold text-black dark:text-white"
+                          className="flex items-center justify-center space-x-2 py-3 px-3 rounded-2xl bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-300 dark:border-zinc-700 text-xs font-bold text-black dark:text-white hover:border-yellow-400 transition-all"
                         >
                           <Paperclip className="w-4 h-4 text-zinc-400" />
-                          <span>Upload 📁</span>
+                          <span>Upload File</span>
                         </button>
                       </div>
                     )}

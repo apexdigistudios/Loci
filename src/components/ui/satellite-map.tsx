@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useEffect } from "react";
 
 interface Coordinates {
   latitude: number;
@@ -36,6 +37,14 @@ export function SatelliteMap({
   avatarUrl,
   onLocationChange,
 }: SatelliteMapProps) {
+  // Safely trigger a single resize event after mount so Leaflet computes tiles correctly
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      window.dispatchEvent(new Event("resize"));
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <div className={`relative isolate z-0 w-full overflow-hidden border border-zinc-200/70 dark:border-zinc-800 bg-zinc-200 dark:bg-zinc-900 ${className}`}>
       <LeafletSatelliteMap

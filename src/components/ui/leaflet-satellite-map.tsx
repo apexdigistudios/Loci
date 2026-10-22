@@ -46,6 +46,30 @@ function RecenterMap({ coordinates }: { coordinates: Coordinates }) {
   return null;
 }
 
+function MapResizeHandler() {
+  const map = useMap();
+
+  useEffect(() => {
+    // Invalidate size immediately and after layout transitions (e.g. expanding to full screen)
+    map.invalidateSize();
+    const timer = setTimeout(() => {
+      map.invalidateSize();
+    }, 150);
+
+    const handleResize = () => {
+      map.invalidateSize();
+    };
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [map]);
+
+  return null;
+}
+
 function MapPicker({ onPick }: { onPick?: (coordinates: Coordinates) => void }) {
   useMapEvents({
     click(event: LeafletMouseEvent) {
@@ -81,6 +105,7 @@ export function LeafletSatelliteMap({
       attributionControl={false}
       className="h-full w-full"
     >
+      <MapResizeHandler />
       {/* Google Hybrid Satellite & Dense Labels Layer */}
       <TileLayer
         url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
