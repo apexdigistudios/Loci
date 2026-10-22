@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   Radio,
   Loader2,
@@ -111,7 +111,6 @@ export function SharedSessionsPage({
   const [historySessions, setHistorySessions] = useState<SharedSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [activeDetailSession, setActiveDetailSession] = useState<SharedSession | null>(null);
-  const [guardianPhones, setGuardianPhones] = useState<string[]>([]);
   const [detailNow, setDetailNow] = useState(0);
   const [shareFeedback, setShareFeedback] = useState("");
   const [historyTab, setHistoryTab] = useState<"sent" | "received">("sent");
@@ -119,6 +118,7 @@ export function SharedSessionsPage({
   const [isMapFullScreen, setIsMapFullScreen] = useState(false);
   const [receiverCoords, setReceiverCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [showDirections, setShowDirections] = useState(false);
+  const [currentUserProfile, setCurrentUserProfile] = useState<{ nickname?: string; avatar_url?: string } | null>(null);
 
   const activeDetailSessionId = activeDetailSession?.id;
 
@@ -127,35 +127,39 @@ export function SharedSessionsPage({
     return () => window.clearInterval(timer);
   }, []);
 
+  // Fetch current user profile (avatar & nickname) for the receiver marker
   useEffect(() => {
-    if (typeof navigator !== "undefined" && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        ({ coords }) => {
-          setReceiverCoords({ latitude: coords.latitude, longitude: coords.longitude });
-        },
-        (err) => console.warn("Could not acquire receiver location for directions:", err),
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
+    if (!currentUserId && !userPhone) return;
+    async function fetchMyProfile() {
+      let query = supabase.from("users").select("nickname, full_name, avatar_url");
+      if (currentUserId) {
+        query = query.eq("id", currentUserId);
+      } else {
+        query = query.eq("phone", cleanPhone(userPhone));
+      }
+      const { data } = await query.maybeSingle();
+      if (data) {
+        setCurrentUserProfile({
+          nickname: data.nickname || data.full_name || "You",
+          avatar_url: data.avatar_url,
+        });
+      }
     }
-  }, []);
+    void fetchMyProfile();
+  }, [currentUserId, userPhone]);
 
+  // Continuously watch receiver's live geolocation as they move
   useEffect(() => {
-    if (!activeDetailSessionId) return;
-    let cancelled = false;
-    void supabase
-      .from("session_recipients")
-      .select("recipient_phone")
-      .eq("session_id", activeDetailSessionId)
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) {
-          console.error("Failed to load session guardians:", error);
-          return;
-        }
-        setGuardianPhones([...new Set((data || []).map((recipient) => recipient.recipient_phone))]);
-      });
-    return () => { cancelled = true; };
-  }, [activeDetailSessionId]);
+    if (typeof navigator === "undefined" || !navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition(
+      ({ coords }) => {
+        setReceiverCoords({ latitude: coords.latitude, longitude: coords.longitude });
+      },
+      (err) => console.warn("Live geolocation watch error:", err),
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, []);
 
   const fetchSharedSessions = useCallback(async () => {
     setSessionsLoading(true);
@@ -253,6 +257,7 @@ export function SharedSessionsPage({
     }
   }, [currentUserId, userPhone]);
 
+  // Real-time Supabase subscription to instantly pick up sender's location updates
   useEffect(() => {
     const loadTimer = window.setTimeout(() => void fetchSharedSessions(), 0);
 
@@ -466,8 +471,11 @@ export function SharedSessionsPage({
                     longitude={activeDetailCoordinates.longitude}
                     nickname={ownerName}
                     avatarUrl={activeDetailSession.user?.avatar_url}
+                    receiverNickname={currentUserProfile?.nickname || "You"}
+                    receiverAvatarUrl={currentUserProfile?.avatar_url}
                     interactive={false}
-                    {...({ showDirections, receiverLocation: receiverCoords || undefined } as any)}
+                    showDirections={showDirections}
+                    receiverLocation={receiverCoords || undefined}
                   />
                 </div>
                 <button
@@ -543,8 +551,11 @@ export function SharedSessionsPage({
                   longitude={activeDetailCoordinates.longitude}
                   nickname={ownerName}
                   avatarUrl={activeDetailSession.user?.avatar_url}
+                  receiverNickname={currentUserProfile?.nickname || "You"}
+                  receiverAvatarUrl={currentUserProfile?.avatar_url}
                   interactive
-                  {...({ showDirections, receiverLocation: receiverCoords || undefined } as any)}
+                  showDirections={showDirections}
+                  receiverLocation={receiverCoords || undefined}
                   className="h-full w-full"
                 />
               </div>
@@ -558,7 +569,7 @@ export function SharedSessionsPage({
               <MessageSquare className="w-3 h-3 text-yellow-500 shrink-0" />
               <span>SOS Emergency Note</span>
             </p>
-            <p className="text-zinc-700 dark:text-zinc-200 font-medium text-[11px] wrap-break-word">{activeDetailSession.notes}</p>
+            <p className="text-zinc-700 dark:text-zinc-200 font-medium text-[11px] break-words">{activeDetailSession.notes}</p>
           </div>
         )}
 

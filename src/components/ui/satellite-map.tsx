@@ -42,7 +42,7 @@ export function SatelliteMap({
   const [leafletLoaded, setLeafletLoaded] = useState(false);
   const LRef = useRef<any>(null);
 
-  // Load Leaflet dynamically on the client side to prevent SSR "window is not defined" error
+  // Load Leaflet dynamically on the client side
   useEffect(() => {
     let isMounted = true;
     import("leaflet").then((L) => {
@@ -55,7 +55,7 @@ export function SatelliteMap({
     };
   }, []);
 
-  // Initialize map with Google Hybrid / Labeled Satellite Layer & Resize observer
+  // Initialize map with Google Hybrid tile layer
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current || mapInstanceRef.current) return;
     const L = LRef.current;
@@ -66,7 +66,6 @@ export function SatelliteMap({
       attributionControl: false,
     }).setView([latitude, longitude], 15);
 
-    // Google Labeled Hybrid Satellite tile layer
     L.tileLayer("https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", {
       maxZoom: 20,
     }).addTo(map);
@@ -74,14 +73,10 @@ export function SatelliteMap({
     L.control.zoom({ position: "topright" }).addTo(map);
     mapInstanceRef.current = map;
 
-    const handleResize = () => {
-      map.invalidateSize();
-    };
+    const handleResize = () => map.invalidateSize();
     window.addEventListener("resize", handleResize);
 
-    const resizeTimer = setTimeout(() => {
-      map.invalidateSize();
-    }, 150);
+    const resizeTimer = setTimeout(() => map.invalidateSize(), 150);
 
     return () => {
       clearTimeout(resizeTimer);
@@ -91,17 +86,15 @@ export function SatelliteMap({
     };
   }, [leafletLoaded]);
 
-  // Invalidate map size whenever className or showDirections changes
+  // Invalidate map size on class/direction change
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
-    const timer = setTimeout(() => {
-      map.invalidateSize();
-    }, 100);
+    const timer = setTimeout(() => map.invalidateSize(), 100);
     return () => clearTimeout(timer);
   }, [className, showDirections]);
 
-  // Update sender marker with name + avatar layout & continuously update live movement
+  // Update sender marker position instantly when coordinates change
   useEffect(() => {
     const map = mapInstanceRef.current;
     const L = LRef.current;
@@ -135,11 +128,10 @@ export function SatelliteMap({
       markerRef.current.setIcon(customIcon);
     } else {
       markerRef.current = L.marker([latitude, longitude], { icon: customIcon }).addTo(map);
-      markerRef.current.bindPopup(`<b>${nickname}</b>`);
     }
   }, [latitude, longitude, nickname, avatarUrl, showDirections, leafletLoaded]);
 
-  // Handle interactive map clicks for manual pin dropping
+  // Handle interactive map clicks
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || !interactive) return;
@@ -155,7 +147,7 @@ export function SatelliteMap({
     };
   }, [interactive, onLocationChange, leafletLoaded]);
 
-  // Handle Directions & Live Route Calculation (Updating continuously as sender/receiver move)
+  // Handle live directions & real-time polyline / receiver position updates
   useEffect(() => {
     const map = mapInstanceRef.current;
     const L = LRef.current;
@@ -175,7 +167,6 @@ export function SatelliteMap({
       return;
     }
 
-    // Custom marker for YOU (Receiver) with Avatar/Initials and Name
     const receiverIcon = L.divIcon({
       className: "loci-leaflet-receiver-marker",
       html: `
@@ -196,7 +187,6 @@ export function SatelliteMap({
     });
 
     receiverMarkerRef.current = L.marker([receiverLocation.latitude, receiverLocation.longitude], { icon: receiverIcon }).addTo(map);
-    receiverMarkerRef.current.bindPopup(`<b>${receiverNickname} (You)</b>`);
 
     async function fetchLiveRoute() {
       try {
@@ -216,6 +206,7 @@ export function SatelliteMap({
           }).addTo(map);
 
           routeLayerRef.current = polyline;
+          map.fitBounds(polyline.getBounds(), { padding: [60, 60] });
 
           const distKm = (route.distance / 1000).toFixed(1);
           const durMins = Math.round(route.duration / 60);
@@ -237,7 +228,7 @@ export function SatelliteMap({
     }
 
     void fetchLiveRoute();
-  }, [showDirections, receiverLocation, latitude, longitude, leafletLoaded, receiverNickname, receiverAvatarUrl]);
+  }, [showDirections, receiverLocation?.latitude, receiverLocation?.longitude, latitude, longitude, leafletLoaded, receiverNickname, receiverAvatarUrl]);
 
   return (
     <div className="relative h-full w-full">
