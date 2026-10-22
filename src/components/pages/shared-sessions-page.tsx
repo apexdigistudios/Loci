@@ -249,7 +249,7 @@ export function SharedSessionsPage({
     }
   }, [currentUserId, userPhone]);
 
-  // Real-time Supabase subscription with INSTANT state patching for coordinates and status updates
+  // Real-time Supabase subscription with safe deep-merging of coordinates & metadata
   useEffect(() => {
     const loadTimer = window.setTimeout(() => void fetchSharedSessions(), 0);
 
@@ -262,10 +262,28 @@ export function SharedSessionsPage({
           if (payload.eventType === "UPDATE" && payload.new) {
             const updated = payload.new as SharedSession;
             setSharedSessions((prev) =>
-              prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
+              prev.map((s) =>
+                s.id === updated.id
+                  ? {
+                      ...s,
+                      ...updated,
+                      metadata: updated.metadata ? { ...(s.metadata || {}), ...(updated.metadata as Record<string, unknown>) } : s.metadata,
+                      user: updated.user || s.user,
+                    }
+                  : s
+              )
             );
             setHistorySessions((prev) =>
-              prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
+              prev.map((s) =>
+                s.id === updated.id
+                  ? {
+                      ...s,
+                      ...updated,
+                      metadata: updated.metadata ? { ...(s.metadata || {}), ...(updated.metadata as Record<string, unknown>) } : s.metadata,
+                      user: updated.user || s.user,
+                    }
+                  : s
+              )
             );
           } else {
             void fetchSharedSessions();
@@ -469,7 +487,7 @@ export function SharedSessionsPage({
               <div className="relative group">
                 <div onClick={() => setIsMapFullScreen(true)} className="cursor-pointer">
                   <SatelliteMap
-                    key={`${activeDetailCoordinates.latitude}-${activeDetailCoordinates.longitude}`}
+                    key={`map-${activeDetailCoordinates.latitude}-${activeDetailCoordinates.longitude}`}
                     latitude={activeDetailCoordinates.latitude}
                     longitude={activeDetailCoordinates.longitude}
                     nickname={ownerName}
@@ -550,7 +568,7 @@ export function SharedSessionsPage({
               </div>
               <div className="flex-1 rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 relative">
                 <SatelliteMap
-                  key={`${activeDetailCoordinates.latitude}-${activeDetailCoordinates.longitude}`}
+                  key={`modal-map-${activeDetailCoordinates.latitude}-${activeDetailCoordinates.longitude}`}
                   latitude={activeDetailCoordinates.latitude}
                   longitude={activeDetailCoordinates.longitude}
                   nickname={ownerName}
