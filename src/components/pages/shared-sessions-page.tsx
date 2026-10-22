@@ -64,6 +64,8 @@ function getSessionCoordinates(session: SharedSession) {
     return Number.isFinite(coordinate) ? coordinate : null;
   };
   const geoJsonCoordinates = Array.isArray(location.coordinates) ? location.coordinates : [];
+  
+  // Prioritize metadata coordinates pushed live during SOS or regular updates
   const latitude = readCoordinate(metadata.latitude, row.current_lat, row.latitude, row.lat, row.location_latitude, row.last_latitude, location.latitude, location.lat, geoJsonCoordinates[1]);
   const longitude = readCoordinate(metadata.longitude, row.current_lng, row.longitude, row.lng, row.location_longitude, row.last_longitude, location.longitude, location.lng, geoJsonCoordinates[0]);
 
@@ -127,7 +129,6 @@ export function SharedSessionsPage({
     return () => window.clearInterval(timer);
   }, []);
 
-  // Fetch current user profile (avatar & nickname) for the receiver marker
   useEffect(() => {
     if (!currentUserId && !userPhone) return;
     async function fetchMyProfile() {
@@ -148,7 +149,6 @@ export function SharedSessionsPage({
     void fetchMyProfile();
   }, [currentUserId, userPhone]);
 
-  // Continuously watch receiver's live geolocation as they move
   useEffect(() => {
     if (typeof navigator === "undefined" || !navigator.geolocation) return;
     const watchId = navigator.geolocation.watchPosition(
@@ -156,7 +156,7 @@ export function SharedSessionsPage({
         setReceiverCoords({ latitude: coords.latitude, longitude: coords.longitude });
       },
       (err) => console.warn("Live geolocation watch error:", err),
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
     );
     return () => navigator.geolocation.clearWatch(watchId);
   }, []);
@@ -257,7 +257,6 @@ export function SharedSessionsPage({
     }
   }, [currentUserId, userPhone]);
 
-  // Real-time Supabase subscription to instantly pick up sender's location updates
   useEffect(() => {
     const loadTimer = window.setTimeout(() => void fetchSharedSessions(), 0);
 
