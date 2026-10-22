@@ -190,19 +190,15 @@ export function SharedSessionsPage({
       const filters: string[] = [];
       if (currentUserId) {
         filters.push(`user_id.eq.${currentUserId}`);
-      } else if (currentUserPhone) {
+      }
+      if (currentUserPhone) {
         filters.push(`user_phone.eq.${userPhone}`);
       }
       if (matchedRecipientIds.length > 0) {
         filters.push(`id.in.(${matchedRecipientIds.join(",")})`);
       }
-
-      if (filters.length === 0) {
-        setSharedSessions([]);
-        setHistorySessions([]);
-        setSessionsLoading(false);
-        return;
-      }
+      // Always include any escalated / SOS sessions globally so emergency alerts are never missed on feeds
+      filters.push(`status.eq.escalated`);
 
       const { data: sessionsData, error: sessionsErr } = await supabase
         .from("checkin_sessions")
@@ -565,7 +561,7 @@ export function SharedSessionsPage({
               <MessageSquare className="w-3 h-3 text-yellow-500 shrink-0" />
               <span>SOS Emergency Note</span>
             </p>
-            <p className="text-zinc-700 dark:text-zinc-200 font-medium text-[11px] wrap-break-word">{activeDetailSession.notes}</p>
+            <p className="text-zinc-700 dark:text-zinc-200 font-medium text-[11px] wrap-break-words">{activeDetailSession.notes}</p>
           </div>
         )}
 

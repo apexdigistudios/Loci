@@ -276,10 +276,6 @@ export function SessionPage({
       return;
     }
 
-    setLocationCoords(null);
-    setLocationUpdatedAt(null);
-    setManuallyPickedLocation(false);
-    manuallyPickedLocationRef.current = false;
     setLocationStatus("requesting");
     if (locationWatchIdRef.current !== null) {
       navigator.geolocation.clearWatch(locationWatchIdRef.current);
@@ -289,7 +285,15 @@ export function SessionPage({
         if (manuallyPickedLocationRef.current) return;
         const latitude = coords.latitude;
         const longitude = coords.longitude;
-        setLocationCoords({ latitude, longitude });
+
+        // Throttle minor coordinate updates to avoid unnecessary component re-renders
+        setLocationCoords((prev) => {
+          if (!prev) return { latitude, longitude };
+          const distanceDelta = Math.abs(prev.latitude - latitude) + Math.abs(prev.longitude - longitude);
+          if (distanceDelta < 0.00001) return prev;
+          return { latitude, longitude };
+        });
+
         setLocationUpdatedAt(new Date());
         setLocationStatus(coords.accuracy > 500 ? "low-accuracy" : "granted");
 
@@ -307,10 +311,7 @@ export function SessionPage({
                 is_sos: activeSession.status === "escalated",
               },
             })
-            .eq("id", activeSession.id)
-            .then(({ error }) => {
-              if (error) console.error("Failed to update live session location:", error);
-            });
+            .eq("id", activeSession.id);
         }
       },
       () => setLocationStatus("denied"),
@@ -326,7 +327,11 @@ export function SessionPage({
         navigator.geolocation.getCurrentPosition(async ({ coords }) => {
           const latitude = coords.latitude;
           const longitude = coords.longitude;
-          setLocationCoords({ latitude, longitude });
+          setLocationCoords((prev) => {
+            if (!prev) return { latitude, longitude };
+            if (Math.abs(prev.latitude - latitude) < 0.00001 && Math.abs(prev.longitude - longitude) < 0.00001) return prev;
+            return { latitude, longitude };
+          });
 
           if (!activeSession.id.startsWith("local-")) {
             await supabase
@@ -391,10 +396,7 @@ export function SessionPage({
             is_sos: activeSession.status === "escalated",
           },
         })
-        .eq("id", activeSession.id)
-        .then(({ error }) => {
-          if (error) console.error("Failed to update manually selected session location:", error);
-        });
+        .eq("id", activeSession.id);
     }
   };
 
