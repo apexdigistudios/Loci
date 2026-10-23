@@ -22,9 +22,10 @@ import { useSubscription } from "@/hooks/use-subscription";
 
 export interface Contact {
   id: string;
+  contact_user_id?: string | null;
   name: string;
   phone: string;
-  group_category?: string;
+  group_category?: string | null;
   isLociUser?: boolean;
   avatar_url?: string;
 }
@@ -178,7 +179,6 @@ export function SharedSessionsPage({
     try {
       const currentUserPhone = cleanPhone(userPhone);
 
-      // Fetch all session recipients to find matching IDs using robust phone matching
       const { data: recipientData, error: recipErr } = await supabase
         .from("session_recipients")
         .select("session_id, recipient_phone, contact_phone");
@@ -208,7 +208,6 @@ export function SharedSessionsPage({
       if (matchedRecipientIds.length > 0) {
         filters.push(`id.in.(${matchedRecipientIds.join(",")})`);
       }
-      // Always include active/escalated globally or via recipients
       filters.push(`status.eq.escalated`);
 
       const { data: sessionsData, error: sessionsErr } = await supabase
@@ -261,7 +260,6 @@ export function SharedSessionsPage({
     }
   }, [currentUserId, userPhone]);
 
-  // Real-time Supabase subscription with safe deep-merging of coordinates & metadata
   useEffect(() => {
     const loadTimer = window.setTimeout(() => void fetchSharedSessions(), 0);
 
