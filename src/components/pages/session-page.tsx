@@ -826,13 +826,15 @@ export function SessionPage({
             targetSessionId = newSession.id;
 
             if (sharedContacts.length > 0) {
-              const { error: recipientError } = await supabase.from("session_recipients").insert(
-                sharedContacts.map((contact) => ({
+              const recipientRows = sharedContacts.map((contact) => {
+                const cleaned = normalizePhone(contact.phone);
+                return {
                   session_id: newSession.id,
-                  recipient_phone: contact.phone,
-                  contact_phone: contact.phone,
-                }))
-              );
+                  recipient_phone: cleaned,
+                  contact_phone: cleaned,
+                };
+              });
+              const { error: recipientError } = await supabase.from("session_recipients").insert(recipientRows);
               if (recipientError) throw recipientError;
             }
           }
@@ -1048,7 +1050,39 @@ export function SessionPage({
       notificationMessage = "We couldn’t enable notifications right now. You can turn them on later in Settings.";
     }
 
+    // Call the parent session starter which creates the session row
     const started = await Promise.resolve(handleStartSession(event, locationCoords || undefined));
+
+    // CRITICAL UPDATE: Ensure selected contacts are explicitly bound in session_recipients
+    if (started !== false && userId && selectedContactIds.length > 0) {
+      try {
+        // Fetch the most recent active session for this user to grab its ID
+        const { data: latestSession } = await supabase
+          .from("checkin_sessions")
+          .select("id")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (latestSession?.id) {
+          const recipientRows = sharedContacts.map((contact) => {
+            const cleaned = normalizePhone(contact.phone);
+            return {
+              session_id: latestSession.id,
+              recipient_phone: cleaned,
+              contact_phone: cleaned,
+            };
+          });
+
+          // Insert or upsert recipients securely
+          await supabase.from("session_recipients").upsert(recipientRows, { onConflict: "session_id,recipient_phone" });
+        }
+      } catch (recipErr) {
+        console.error("Failed to associate session recipients automatically:", recipErr);
+      }
+    }
+
     if (started === false) {
       setActionMessage("Your session is running on this device, but it couldn’t sync with your contacts. Check your connection before relying on contact alerts.");
     } else if (notificationMessage) {
