@@ -16,7 +16,6 @@ import {
   Lock,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { db } from "@/lib/db";
 import { SatelliteMap } from "../ui/satellite-map";
 import { cleanPhone } from "@/lib/utils";
 import { useSubscription } from "@/hooks/use-subscription";
@@ -25,7 +24,7 @@ export interface Contact {
   id: string;
   name: string;
   phone: string;
-  group_category?: string | null;
+  group_category?: string;
   isLociUser?: boolean;
   avatar_url?: string;
 }
@@ -91,6 +90,16 @@ function openInDeviceMaps(latitude: number, longitude: number) {
   window.open(url, "_blank");
 }
 
+/** Robust phone matcher that compares last 9 digits to ignore country code formatting variances */
+function phonesMatch(phoneA?: string, phoneB?: string): boolean {
+  if (!phoneA || !phoneB) return false;
+  const cleanA = cleanPhone(phoneA);
+  const cleanB = cleanPhone(phoneB);
+  if (!cleanA || !cleanB) return false;
+  if (cleanA === cleanB) return true;
+  return cleanA.slice(-9) === cleanB.slice(-9);
+}
+
 interface SharedSessionsPageProps {
   userPhone: string;
   currentUserId: string | null;
@@ -135,14 +144,7 @@ export function SharedSessionsPage({
   useEffect(() => {
     if (!currentUserId && !userPhone) return;
     async function fetchMyProfile() {
-      const cached = currentUserId
-        ? await db.users.get(currentUserId)
-        : await db.users.where("phone").equals(cleanPhone(userPhone)).first();
-      if (cached) {
-        setCurrentUserProfile({ nickname: cached.nickname || cached.full_name || "You", avatar_url: cached.avatar_url || undefined });
-      }
-      if (!navigator.onLine) return;
-      let query = supabase.from("users").select("id, phone, nickname, full_name, avatar_url");
+      let query = supabase.from("users").select("nickname, full_name, avatar_url");
       if (currentUserId) {
         query = query.eq("id", currentUserId);
       } else {
@@ -153,14 +155,6 @@ export function SharedSessionsPage({
         setCurrentUserProfile({
           nickname: data.nickname || data.full_name || "You",
           avatar_url: data.avatar_url,
-        });
-        await db.users.put({
-          id: data.id,
-          phone: cleanPhone(data.phone),
-          nickname: data.nickname,
-          full_name: data.full_name,
-          avatar_url: data.avatar_url,
-          cached_at: new Date().toISOString(),
         });
       }
     }
@@ -180,41 +174,24 @@ export function SharedSessionsPage({
   }, []);
 
   const fetchSharedSessions = useCallback(async () => {
-    const currentUserPhone = cleanPhone(userPhone);
-    const cachedSessions = await db.checkin_sessions.toArray();
-    const scopedCachedSessions = cachedSessions.filter((session) => session.scope_phone === currentUserPhone);
-    if (scopedCachedSessions.length > 0) {
-      setSharedSessions(scopedCachedSessions.filter((session) =>
-        session.status === "active" || session.status === "escalated" || session.status === "missed"
-      ) as SharedSession[]);
-      setHistorySessions(scopedCachedSessions.filter((session) =>
-        session.status === "completed" || session.status === "expired"
-      ) as SharedSession[]);
-      setSessionsLoading(false);
-    } else if (navigator.onLine) {
-      setSessionsLoading(true);
-    } else {
-      setSessionsLoading(false);
-    }
-    if (!navigator.onLine) return;
-
+    setSessionsLoading(true);
     try {
+      const currentUserPhone = cleanPhone(userPhone);
+
+      // Fetch all session recipients to find matching IDs using robust phone matching
       const { data: recipientData, error: recipErr } = await supabase
         .from("session_recipients")
         .select("session_id, recipient_phone, contact_phone");
 
-      if (recipErr) {
-        console.error("Error fetching session recipients:", recipErr);
-        return;
-      }
+      if (recipErr) console.error("Error fetching session recipients:", recipErr);
 
       const matchedRecipientIds = Array.from(
         new Set(
           (recipientData || [])
             .filter(
               (row) =>
-                cleanPhone(row.recipient_phone) === currentUserPhone ||
-                cleanPhone(row.contact_phone) === currentUserPhone
+                phonesMatch(row.recipient_phone, userPhone) ||
+                phonesMatch(row.contact_phone, userPhone)
             )
             .map((row) => row.session_id)
             .filter(Boolean)
@@ -231,6 +208,7 @@ export function SharedSessionsPage({
       if (matchedRecipientIds.length > 0) {
         filters.push(`id.in.(${matchedRecipientIds.join(",")})`);
       }
+      // Always include active/escalated globally or via recipients
       filters.push(`status.eq.escalated`);
 
       const { data: sessionsData, error: sessionsErr } = await supabase
@@ -240,7 +218,6 @@ export function SharedSessionsPage({
         .order("created_at", { ascending: false });
 
       if (sessionsErr) console.error("Error fetching sessions:", sessionsErr);
-      if (sessionsErr) return;
 
       const allSessions = sessionsData || [];
 
@@ -251,28 +228,18 @@ export function SharedSessionsPage({
         new Set(allSessions.map((session) => session.user_phone as string).filter(Boolean))
       );
 
-      let usersData: Array<{ id: string; phone: string; nickname?: string; full_name?: string; avatar_url?: string }> = [];
+      let usersData: Array<{ phone: string; nickname?: string; full_name?: string; avatar_url?: string }> = [];
       if (senderPhones.length > 0) {
         const { data: uData } = await supabase
           .from("users")
-          .select("id, phone, nickname, full_name, avatar_url")
+          .select("phone, nickname, full_name, avatar_url")
           .in("phone", senderPhones);
         usersData = uData || [];
-        if (usersData.length > 0) {
-          await db.users.bulkPut(usersData.map((user) => ({
-            id: user.id,
-            phone: cleanPhone(user.phone),
-            nickname: user.nickname,
-            full_name: user.full_name,
-            avatar_url: user.avatar_url,
-            cached_at: new Date().toISOString(),
-          })));
-        }
       }
 
       const formatSession = (session: Record<string, unknown>) => {
         const matchedUser = usersData.find(
-          (user) => cleanPhone(user.phone) === cleanPhone(String(session.user_phone || ""))
+          (user) => phonesMatch(user.phone, String(session.user_phone || ""))
         );
         return {
           ...session,
@@ -287,18 +254,6 @@ export function SharedSessionsPage({
 
       setSharedSessions(formattedActive);
       setHistorySessions(formattedHistory);
-      await db.transaction("rw", db.checkin_sessions, async () => {
-        const existing = await db.checkin_sessions.where("scope_phone").equals(currentUserPhone).toArray();
-        const nextIds = new Set(allSessions.map((session) => String(session.id)));
-        const staleIds = existing
-          .filter((session) => !nextIds.has(session.id))
-          .map((session) => session.id);
-        if (staleIds.length > 0) await db.checkin_sessions.bulkDelete(staleIds);
-        await db.checkin_sessions.bulkPut(allSessions.map((session) => ({
-          ...formatSession(session as unknown as Record<string, unknown>),
-          scope_phone: currentUserPhone,
-        })) as unknown as import("@/lib/db").OfflineSession[]);
-      });
     } catch (err) {
       console.error("Error fetching shared sessions:", err);
     } finally {
@@ -309,8 +264,6 @@ export function SharedSessionsPage({
   // Real-time Supabase subscription with safe deep-merging of coordinates & metadata
   useEffect(() => {
     const loadTimer = window.setTimeout(() => void fetchSharedSessions(), 0);
-    const refreshOnline = () => void fetchSharedSessions();
-    window.addEventListener("online", refreshOnline);
 
     const channel = supabase
       .channel("checkin_sessions_realtime_feed")
@@ -318,64 +271,49 @@ export function SharedSessionsPage({
         "postgres_changes",
         { event: "*", schema: "public", table: "checkin_sessions" },
         (payload) => {
-          if (process.env.NODE_ENV === "development") {
-            const newRow = payload.new as Record<string, unknown> | null;
-            const oldRow = payload.old as Record<string, unknown> | null;
-            console.log("[checkin_sessions realtime] event:", payload.eventType);
-            console.log("[checkin_sessions realtime] new row:", payload.new);
-            console.log("[checkin_sessions realtime] session id:", newRow?.id || oldRow?.id || null);
-          }
-
           if (payload.eventType === "UPDATE" && payload.new) {
             const updated = payload.new as SharedSession;
-            const activeStatuses = ["active", "escalated", "missed"];
-            const historyStatuses = ["completed", "expired"];
-            const isActive = activeStatuses.includes(updated.status);
-            const isHistory = historyStatuses.includes(updated.status);
-
             setSharedSessions((prev) => {
-              const existing = prev.find((session) => session.id === updated.id);
-              const merged = {
-                ...existing,
-                ...updated,
-                metadata: updated.metadata
-                  ? { ...(existing?.metadata || {}), ...(updated.metadata as Record<string, unknown>) }
-                  : existing?.metadata,
-                user: updated.user || existing?.user,
-              } as SharedSession;
-              const withoutUpdated = prev.filter((session) => session.id !== updated.id);
-              return isActive ? [merged, ...withoutUpdated] : withoutUpdated;
+              const exists = prev.some((s) => s.id === updated.id);
+              if (!exists && (updated.status === "active" || updated.status === "escalated" || updated.status === "missed")) {
+                return [updated, ...prev];
+              }
+              return prev.map((s) =>
+                s.id === updated.id
+                  ? {
+                      ...s,
+                      ...updated,
+                      metadata: updated.metadata ? { ...(s.metadata || {}), ...(updated.metadata as Record<string, unknown>) } : s.metadata,
+                      user: updated.user || s.user,
+                    }
+                  : s
+              );
             });
             setHistorySessions((prev) => {
-              const existing = prev.find((session) => session.id === updated.id);
-              const merged = {
-                ...existing,
-                ...updated,
-                metadata: updated.metadata
-                  ? { ...(existing?.metadata || {}), ...(updated.metadata as Record<string, unknown>) }
-                  : existing?.metadata,
-                user: updated.user || existing?.user,
-              } as SharedSession;
-              const withoutUpdated = prev.filter((session) => session.id !== updated.id);
-              return isHistory ? [merged, ...withoutUpdated] : withoutUpdated;
+              const exists = prev.some((s) => s.id === updated.id);
+              if (!exists && (updated.status === "completed" || updated.status === "expired")) {
+                return [updated, ...prev];
+              }
+              return prev.map((s) =>
+                s.id === updated.id
+                  ? {
+                      ...s,
+                      ...updated,
+                      metadata: updated.metadata ? { ...(s.metadata || {}), ...(updated.metadata as Record<string, unknown>) } : s.metadata,
+                      user: updated.user || s.user,
+                    }
+                  : s
+              );
             });
           } else {
             void fetchSharedSessions();
           }
         }
       )
-      .subscribe((status, error) => {
-        if (process.env.NODE_ENV === "development") {
-          console.log("[checkin_sessions realtime] channel status:", status, error || "");
-        }
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          console.error("checkin_sessions realtime connection failed:", status, error);
-        }
-      });
+      .subscribe();
 
     return () => {
       window.clearTimeout(loadTimer);
-      window.removeEventListener("online", refreshOnline);
       supabase.removeChannel(channel);
     };
   }, [fetchSharedSessions]);
@@ -401,7 +339,7 @@ export function SharedSessionsPage({
 
   const isSessionSender = (session: SharedSession) => {
     if (currentUserId && session.user_id === currentUserId) return true;
-    return cleanPhone(session.user_phone) === cleanPhone(userPhone);
+    return phonesMatch(session.user_phone, userPhone);
   };
 
   const getSenderDisplayName = (session: SharedSession) => {
@@ -409,7 +347,7 @@ export function SharedSessionsPage({
     return (
       session.user?.nickname ||
       session.user?.full_name ||
-      contacts.find((c) => cleanPhone(c.phone) === cleanPhone(session.user_phone))?.name ||
+      contacts.find((c) => phonesMatch(c.phone, session.user_phone))?.name ||
       session.user_phone
     );
   };
